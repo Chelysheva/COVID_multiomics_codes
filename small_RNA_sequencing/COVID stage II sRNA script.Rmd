@@ -1,0 +1,2773 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+
+```{r ANALYSIS STYLE SELECTION}
+
+#1. baseline comparisons e.g. D0 vs CT
+# unpaired is best as not enough D0 for COVID phase 2 people i.e. most CT+ves
+# Don't include RCC as very few RCC for D0
+
+
+#2. Cross sectional comparisons e.g. CT +ve Men vs C+ve Chad
+# unpaired is best 
+# include RCC
+
+
+#3. longitudinal comparisons e.g. CT vs D7
+# paired is best 
+# include RCC
+
+analysis.setup<-1 #1,2,3
+
+
+```
+
+
+```{r pre requistive packages and functions}
+
+working.directory<-"C:/Users/ruthd/Dropbox/COVID/Nature/files for analysis" # enter working directory where files have been downloaded to
+  
+
+
+############# Dependancies##############################################
+
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+
+
+p_load("readxl","readr", 
+       "pheatmap","plotly",
+       "data.table",
+       "reshape",
+       "tidyr",
+       "edgeR",
+       "stringr",
+       "ggplot2",
+       "Glimma",
+       "plotly",
+       "stringi",
+       "textclean",
+       "RColorBrewer",
+       "readr",
+       "stringi",
+       "preprocessCore",
+       "reshape2",
+       "gplots",
+       "circlize",
+       "gprofiler2",
+       "magrittr",
+       "rJava",
+       "xlsx",
+       "ggpubr",
+       "rstatix",
+       "plotrix",
+       "factoextra",
+       "ggnewscale",
+       "cowplot",
+       "Rtsne",
+       "ggrepel")
+
+
+
+#BiocManager::install("biomaRt")
+library(biomaRt)
+
+
+###########  additional functions ####################
+
+
+MA.plots.all<-function(x,info,pdf.title,folder){
+  
+  volunteers<-unique(info)
+  
+  pdf(paste0(folder,"/",pdf.title,".pdf"))
+  
+  par(mfrow=c(3,3),cex=0.3,pch=16, bg="black",  col.axis="white", col="white", cex.axis=2, col.main="white", col.lab="white", col="white", mar=c(7,4,4,2)+0.1,cex.main=2, cex.axis=1.75, cex.lab=1.75, mgp=c(3,0.8,2), mar=c(0,0,0,0), oma=c(8,8,8,0.5))
+  
+  for(i in 1:length(volunteers)){
+    
+    ppt<-grep(volunteers[i],colnames(x))
+    
+    for(j in 1:length(ppt)){
+      
+      A<-x[,ppt[j]]
+      
+      B<-x[,ppt[-j],drop=F]
+      
+      B<-apply(B,1,mean) # average of lcpm each gene across other timepoints
+      fc<-B-A # foldchange of A compared to other timpepoints
+      av.abundance<-(B+A)/2
+      
+      MA_plot<-plot(av.abundance,fc,col="cornflower blue",xlab="log2 of average abundance (counts)", ylab="log2 of average fold change", xlim=c(0,20),ylim=c(-5,5))+
+        abline(h=0,col="red")+
+        mtext("log2 of average abundance (counts)", side = 1, outer = TRUE, cex = 1, line = 4)
+      mtext("log2 of average fold change", side = 2, outer = TRUE, cex = 1, line = 4)
+      mtext(paste("MA Plots of given timepoint's average of all other timepoints"), side = 3, outer = TRUE, cex = 1, line = 4)
+      legend("topleft",y.intersp=1, colnames(x)[ppt[j]],pch=16,bg=NULL,bty="n", cex=4, col="blue",pt.cex=0)
+      print(i)
+    }
+  }
+}
+
+
+MA.plots.vs.everythingelse<-function(x,info,pdf.title,folder){
+  
+  volunteers<-unique(info)
+  
+  pdf(paste0(folder,"/",pdf.title,"one sample vs all other samples.pdf"))
+  
+  par(mfrow=c(3,3),cex=0.3,pch=16, bg="black",  col.axis="white", col="white", cex.axis=2, col.main="white", col.lab="white", col="white", mar=c(7,4,4,2)+0.1,cex.main=2, cex.axis=1.75, cex.lab=1.75, mgp=c(3,0.8,2), mar=c(0,0,0,0), oma=c(8,8,8,0.5))
+  
+  for(i in 1:length(volunteers)){
+    
+    ppt<-grep(volunteers[i],colnames(x))
+    
+    for(j in 1:length(ppt)){
+      
+      samp<-ppt[j]
+      
+      A<-x[,samp]
+      
+      B<-x[,-samp,drop=F]
+      
+      B<-apply(B,1,mean) # average of lcpm each gene across other timepoints
+      fc<-B-A # foldchang of A compared to other timpepoints
+      av.abundance<-(B+A)/2
+      
+      MA_plot<-plot(av.abundance,fc,col="cornflower blue",xlab="log2 of average abundance (counts)", ylab="log2 of average fold change", xlim=c(0,20),ylim=c(-5,5))+
+        abline(h=0,col="red")+
+        mtext("log2 of average abundance (counts)", side = 1, outer = TRUE, cex = 1, line = 4)
+      mtext("log2 of average fold change", side = 2, outer = TRUE, cex = 1, line = 4)
+      mtext(paste("MA Plots of given timepoint's average of all other timepoints"), side = 3, outer = TRUE, cex = 1, line = 4)
+      legend("topleft",y.intersp=1, colnames(x)[ppt[j]],pch=16,bg=NULL,bty="n", cex=4, col="blue",pt.cex=0)
+      print(i)
+    }
+  }
+}
+
+
+MA.plots<-function(x,pdf.title,timepoint1,timepoint2){
+  
+  pdf(paste0(pdf.title,"_",timepoint1," vs ", timepoint2, "_noise threshold at least ",c," cpm in ", 100*proportion, " percent of samples.pdf"))
+  
+  lcpm<-x
+  
+  A<-lcpm[,grep(timepoint1,colnames(lcpm))]
+  B<-lcpm[,grep(timepoint2,colnames(lcpm))]
+  
+  keep.A<-stri_sub(colnames(A),1,4)%in%stri_sub(colnames(B),1,4)
+  A<-A[,keep.A]
+  
+  keep.B<-stri_sub(colnames(B),1,4)%in%stri_sub(colnames(A),1,4)
+  B<-B[,keep.B]
+  
+  
+  summary(stri_sub(colnames(A),1,4)==stri_sub(colnames(B),1,4)) # a check that the participant samples are in the same order in both dataframes
+  
+  fc<-B-A
+  av.abundance<-(B+A)/2
+  
+  par(mfrow=c(3,3),cex=0.3,pch=16, bg="black",  col.axis="white", col="white", cex.axis=2, col.main="white", col.lab="white", col="white", mar=c(7,4,4,2)+0.1,cex.main=2, cex.axis=1.75, cex.lab=1.75, mgp=c(3,0.8,2), mar=c(0,0,0,0), oma=c(8,8,8,0.5))
+  
+  for (i in 1: ncol(fc)){
+    MA_plot<-plot(av.abundance[,i],fc[,i],col="cornflower blue",xlab="log2 of average abundance (counts)", ylab="log2 of average fold change", xlim=c(min(av.abundance),max(av.abundance)),ylim=c(min(fc),max(fc))) +
+      abline(h=0,col="red")+
+      mtext("log2 of average abundance (counts)", side = 1, outer = TRUE, cex = 1, line = 4)
+    mtext("log2 of average fold change", side = 2, outer = TRUE, cex = 1, line = 4)
+    mtext(paste("MA Plots of",timepoint1, "v's",timepoint2), side = 3, outer = TRUE, cex = 1, line = 4)
+    legend("topleft",y.intersp=1, stri_sub(colnames(fc)[i],1,4),pch=16,bg=NULL,bty="n", cex=4, col="blue",pt.cex=0)
+    print(i)
+  }
+  
+  dev.off()
+}
+```
+
+
+
+
+```{r user input}
+######## user input ############
+
+
+ID.link_file<-paste0(working.directory,"/COVID_stage2_metadata.xlsx")
+
+file.raw<-paste0(working.directory,"/","COVID_stage2_sRNA_raw_count_matrix.RDS")
+
+
+# choose contrast matrix
+
+if(analysis.setup==1){
+  contrast.matracies<-paste0(working.directory,"/COVID_stage2_sRNA_contrast matrix.R") # to look at baseline comparisons e.g.  CT+ve chadox vs baseline. Does not correct for cells as D0 does not have cells.
+  
+}else if (analysis.setup==2) {
+  contrast.matracies<-paste0(working.directory,"/COVID_stage2_contrast_matrix_cell counts no D0.R") # corrects for cells 
+  
+
+  }else if (analysis.setup==3) {
+  
+  contrast.matracies<-paste0(working.directory,"/COVID_stage2_sRNA_contrast_matrix_include_batch_and_red_cells.R") # corrects for cells 
+
+}
+  
+
+```
+
+
+```{r setwd load mtea data file and count table}
+
+## setwd, load mtea data file and count table ####
+
+path<-dirname(file.raw)
+setwd(path)
+
+if(grepl(".csv",ID.link_file)){
+  ID.link_corrected<-read.csv(ID.link_file)}else{
+    ID.link_corrected<-read_xlsx(ID.link_file,sheet=1)}
+
+ID.link_corrected<-data.frame(ID.link_corrected)      
+
+
+
+total.counts4<-readRDS(file.raw) ## load count table (raw count data)
+
+
+### allign names in ID link and count table
+
+
+colnames(total.counts4)<-gsub("X.media.ruth.858a064f.56aa.4a19.b746.0de06e999eac.COVID_extension.merged_files_for_allignment.sRNAome_allignments..|_merged_temp3.txt","",colnames(total.counts4))
+
+table(ID.link_corrected$Index%in%colnames(total.counts4))
+
+if(!names(table(ID.link_corrected$Index%in%colnames(total.counts4)))=="TRUE"){
+  cat("WARNING: there is a discrepancy in sample names in your meta data table and your count table. Please review. \n")
+}
+
+
+total.counts4<-total.counts4[,match(ID.link_corrected$Index,colnames(total.counts4))] # put the order of samples in the ID.link_corrected object in the same as the order of samples in the total.counts4
+
+
+
+## check that the order of samples in the ID.link_corrected object is the same as the order of samples in the total.counts4
+
+if(!names(table(ID.link_corrected$Index==colnames(total.counts4)))=="TRUE"){
+  cat("WARNING: there is a discrepancy in sample order between your meta data table and your normalised count table. Please review. \n")
+}
+```
+
+```{r exploratory work on cell abundances, eval=FALSE, include=FALSE}
+
+# cell counts
+
+# turn into a long format.
+
+cell.counts<-ID.link_corrected[,17:25]
+# long format
+
+cell.counts$timepoint.vaccine<-paste0(ID.link_corrected$timepoint,"_",ID.link_corrected$vaccine,"_",ID.link_corrected$covid_diagnosis)
+
+
+cell.counts$timepoint.vaccine %<>% gsub("D0.*","D0",.) 
+
+cell.counts$timepoint.vaccine[grepl("not_covid",cell.counts$timepoint.vaccine)] %<>% gsub("_.*._","_not.",.)
+
+cell.counts$timepoint.vaccine %<>% factor(.,levels=c("D0","CT_ChAdOx1_had_covid","CT_MenACWY_had_covid","D7_ChAdOx1_had_covid","D7_MenACWY_had_covid"))
+
+
+cell.counts.long %>% 
+  group_by(cell_type,timepoint.vaccine) %>% 
+  summarise(av.cell.counts=mean(value,na.rm=T))
+
+
+cell.counts.long<-pivot_longer(data=cell.counts,
+                               cols=1:9,
+                               names_to = "cell_type")
+
+
+
+# need to get the average expression
+
+mean.cell.counts<-cell.counts.long %>% 
+  group_by(cell_type,timepoint.vaccine) %>% 
+  summarise(av.cell.counts=mean(value,na.rm=T))
+
+
+sd.cell.counts<-cell.counts.long %>% 
+  group_by(cell_type,timepoint.vaccine) %>% 
+  summarise(se=std.error(value,na.rm=T))
+
+mean.cell.counts$lower<-mean.cell.counts$av.cell.counts-se.cell.counts$sd
+mean.cell.counts$upper<-mean.cell.counts$av.cell.counts+se.cell.counts$sd
+
+stat.test <- cell.counts.long %>%
+  group_by(cell_type) %>%
+  rstatix::t_test(value~timepoint.vaccine)
+
+#stat.test <- stat.test %>% add_y_position(fun = "mean_sd")
+
+stat.test %<>% .[stat.test$p<0.05,]
+# keep<-(paste(stat.test$group1,stat.test$group2)=="CT_ChAdOx1 CT_MenACWY")|
+#   (paste(stat.test$group1,stat.test$group2)=="D7_ChAdOx1 D7_MenACWY")|
+#   stat.test<-stat.test[keep,]
+stat.test$y.position=10
+
+mean.cell.counts$timepoint.vaccine %<>% factor(.,levels=c("D0","CT_ChAdOx1_had_covid","CT_MenACWY_had_covid","D7_ChAdOx1_had_covid","D7_MenACWY_had_covid"))
+
+stat.test<-stat.test[!(grepl("CT",stat.test$group1)&grepl("D7",stat.test$group2)),]
+stat.test<-stat.test[!(grepl("not.covid",stat.test$group1)&grepl("CT",stat.test$group2)),]
+
+
+ggplot(mean.cell.counts,aes(y=av.cell.counts,
+                            x=timepoint.vaccine,
+                            fill=timepoint.vaccine))+
+  geom_col()+
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width=0.2)+
+  facet_wrap(~mean.cell.counts$cell_type,scales="free_y",nrow=3)+
+  theme(axis.text.x = element_text(size=8,angle=45,hjust = 1))
+
+
+```
+
+
+```{r EXTRACT out species  and people of interest}
+######## extract out pple of interest ####
+
+if(contrast.matracies==paste0(working.directory,"/COVID_stage2_sRNA_contrast matrix.R")){
+
+  
+}else if(grepl("cell",contrast.matracies)){
+  
+  # remove samples with no information on cell counts.
+total.counts4<-total.counts4[,!is.na(ID.link_corrected$redcellcount)]
+ID.link_corrected<-ID.link_corrected[!is.na(ID.link_corrected$redcellcount),]
+
+
+}
+
+
+
+```
+
+
+```{r Create the factors}
+######### Create the factors ####
+# It's easier if the sample names of the count table involves the participant ID and the timepoint
+
+colnames(total.counts4)<-paste0(ID.link_corrected$ID,"_",ID.link_corrected$timepoint_covid)
+
+
+                                     
+# They ran each sample on two flow cells 
+# sum up reads from same pt
+
+samples<-unique(colnames(total.counts4))
+
+total.counts5<-data.frame(matrix(nrow=nrow(total.counts4)))
+
+for (i in 1:length(samples))
+{
+  sample<-samples[i]
+  rv<-total.counts4[,colnames(total.counts4)==sample] %>% rowSums(.)
+  total.counts5[,i]<-rv
+  colnames(total.counts5)[i]<-sample
+}
+
+rownames(total.counts5)<-rownames(total.counts4)
+
+total.counts4<-total.counts5 # for downstream compatibility
+
+# match up ID.link and total counts4 again.
+
+ID.link_corrected$sample.name<-(paste0(ID.link_corrected$ID,"_",ID.link_corrected$timepoint_covid))
+
+ID.link_corrected<-ID.link_corrected[match(colnames(total.counts4),ID.link_corrected$sample.name),]
+
+table(ID.link_corrected$sample.name==colnames(total.counts4)) # check
+
+## removed non paired samples
+if(analysis.setup==3){
+paired_samples<-names(table(ID.link_corrected$ID))[table(ID.link_corrected$ID)>1]
+
+total.counts4<-total.counts4[,ID.link_corrected$ID%in%paired_samples]
+ID.link_corrected<-ID.link_corrected[ID.link_corrected$ID%in%paired_samples,]
+cat("\n people with only one sample have been removed! \n")
+
+}
+
+
+nsamples <- ncol(total.counts4) # total number of samples you have data for - this will be used later in the script
+
+
+timepoint<-factor(ID.link_corrected$timepoint, levels = unique(ID.link_corrected$timepoint))
+
+flowcell<-factor(ID.link_corrected$flowcell, levels = unique(ID.link_corrected$flowcell))
+
+timepoint.diagnosis<-factor(ID.link_corrected$timepoint_covid, levels = unique(ID.link_corrected$timepoint_covid))
+
+
+
+cat("There were no D0 samples in CT+ve people")
+
+timepoint.diagnosis.vaccine<-paste0(timepoint.diagnosis,"_",ID.link_corrected$vaccine)
+
+timepoint.diagnosis.vaccine[grepl("not",timepoint.diagnosis.vaccine)]<-timepoint.diagnosis.vaccine[grepl("not",timepoint.diagnosis.vaccine)] %>%
+  gsub("_MenACWY|_ChAdOx1","",.) # remove vaccine for people who did not get COVID as it is not relevent
+
+
+
+participant<-as.factor(ID.link_corrected$ID)
+
+
+
+Red.cell.count<-ID.link_corrected$redcellcount
+
+platelet<-ID.link_corrected$platelet
+
+neutrophil<-ID.link_corrected$neutrophil
+
+
+
+## create DGEList
+
+total.counts4<-DGEList(total.counts4) ## create a DGEList object (EdgeR and limma like to have the count table in a DGEList format) -- it makes it easier to apply their functions.
+
+cpm.raw<- cpm(total.counts4,prior.count=prior.count)  # cpm = counts per million
+lcpm.raw<- cpm(total.counts4,log=TRUE) #  lcpm = log counts per million
+
+
+total.counts.raw<-total.counts4 # keep a copy of the raw counts
+
+```
+
+
+
+```{r  normalisation}
+rv<-total.counts4$counts %>% data.frame(.)
+
+
+
+c<-6 # min number of reads to be counted as detected in the smallest sample -- determined by reviewing QC graphs
+
+m<-0.2*nsamples # no of samples an miR must be present in to pass filtering, e.g. 0.1-->10%
+
+
+
+
+
+  z<-1000000*(c/min(total.counts.raw$samples$lib.size)) # min lib size = 1.5 million
+  z<-ceiling(z)
+  cat("z=",z,"\n") # the counts per million to filter on (at this counts per million, the smallest sample contained 7 counts i.e. 7 counts per million, smallest lib size was 1.5milllion, which contained z (10) counts)
+  
+
+  keep<-rowSums(cpm(total.counts4)>=z)>=m  #| rownames(total.counts4)%in%rownames(stage1.result) # change
+
+  total.counts4 <- total.counts4[keep, ,keep.lib.sizes=FALSE]
+  total.counts4 <- calcNormFactors(total.counts4)
+  lcpm<-cpm(total.counts4,log=T)
+  cat("no. miRs post filtering =", nrow(lcpm),"\n")
+
+
+normalisation.method=paste("at least",c,"counts in smallest library (=",z,"cpm in",m,"samples)")
+
+folder2<-paste0(path,"/results of TMM ",normalisation.method)
+
+folder2<-gsub("(","",folder2,fixed=T)
+folder2<-gsub(")","",folder2,fixed=T)
+folder2<-gsub("%","percent",folder2)
+folder2
+dir.create(folder2)
+
+saveRDS(lcpm,paste0(working.directory,"/lcpm.for.paper.RDS"))
+
+```
+
+
+```{r overview analysis graphs, eval=F}
+
+if(which.seqs=="all"){
+#### raw 
+
+
+y<-cpm(total.counts.raw)
+y<-data.frame(y)
+
+y$type<-reshape2::colsplit(rownames(y),pattern="_",names=1:10000)[,1]
+y$type[grep("hsa-miR|hsa-let",y$type)]<-"mature_miRNA"
+
+
+rv<-aggregate(.~type, y, sum)
+
+rv.wide<-gather(rv,sample,reads,2:ncol(rv))
+
+rv.wide$visit<-rep(ID.link_corrected$timepoint,each=13)
+
+rv.wide$visit_covid<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis),each=9)
+
+rv.wide$visit_covid_vaccine<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis,ID.link_corrected$vaccine),each=9)
+
+
+rv.wide$visit_covid_vaccine[grep("D0",rv.wide$visit_covid_vaccine)]<-"D0"
+rv.wide$visit_covid_vaccine[grep("D7 not",rv.wide$visit_covid_vaccine)]<-"D7_not_covid"
+rv.wide$visit_covid_vaccine[grep("CT not",rv.wide$visit_covid_vaccine)]<-"CT_not_covid"
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type))+
+  geom_boxplot()+
+  ylab("reads(% mapped)")+
+  xlab("class")+
+  theme_minimal()
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit_covid))+
+  geom_boxplot()+
+  ylab("reads(% mapped)")+
+  xlab("class")+
+  theme_minimal()
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit_covid_vaccine))+
+  geom_boxplot()+
+  ylab("reads(% mapped)")+
+  xlab("class")+
+  theme_minimal()
+
+#### noise removed, not normalised
+
+y<-cpm(total.counts4,normalized.lib.sizes = FALSE)
+y<-data.frame(y)
+
+y$type<-reshape2::colsplit(rownames(y),pattern="_",names=1:10000)[,1]
+y$type[grep("hsa-miR|hsa-let",y$type)]<-"mature_miRNA"
+
+
+rv<-aggregate(.~type, y, sum)
+
+rv.wide<-gather(rv,sample,reads,2:ncol(rv))
+
+rv.wide$visit<-rep(ID.link_corrected$timepoint,each=8)
+rv.wide$visit_covid<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis),each=8)
+
+rv.wide$visit_covid_vaccine<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis,ID.link_corrected$vaccine),each=8)
+
+
+rv.wide$visit_covid_vaccine[grep("D0",rv.wide$visit_covid_vaccine)]<-"D0"
+rv.wide$visit_covid_vaccine[grep("D7 not",rv.wide$visit_covid_vaccine)]<-"D7_not_covid"
+rv.wide$visit_covid_vaccine[grep("CT not",rv.wide$visit_covid_vaccine)]<-"CT_not_covid"
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit))+
+  geom_boxplot()+
+  ylab("reads(% mapped, noise removed, not normalised)")+
+  xlab("class")+
+  theme_minimal()
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit_covid))+
+  geom_boxplot()+
+  ylab("reads(% mapped, noise removed, not normalised)")+
+  xlab("class")+
+  theme_minimal()
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit_covid_vaccine))+
+  geom_boxplot()+
+  ylab("reads(% mapped, noise removed, not normalised)")+
+  xlab("class")+
+  theme_minimal()
+
+#### noise removed, normalised
+
+y<-cpm(total.counts4,normalized.lib.sizes=F)
+y<-data.frame(y)
+
+genes<-reshape2::colsplit(rownames(y),pattern="_",names=1:10000)
+genes<-genes[,colSums(!is.na(genes))>0]
+
+genes<-as.matrix(genes)
+keep.df<-genes[,1]
+genes[!grepl("&",genes)]<-NA
+
+genes[,1]<-keep.df
+genes[grep("hsa-miR|hsa-let",genes)]<-"mature_miRNA"
+genes[grep("ENSG",genes)]<-"protein coding"
+
+genes<-gsub(".*&","",genes[,])
+genes<-genes[,colSums(!is.na(genes))>0]
+test<-data.frame(t(apply(genes,1,function (x) x==x[1]|is.na(x))))
+# if there is a false, then that is a mixed-class mapper
+genes[rowSums(test==F)>0,1]<-"mult-class mapper"
+
+
+
+y$type<-genes[,1]
+
+
+rv<-aggregate(.~type, y, sum)
+
+
+rv.wide<-gather(rv,sample,reads,2:ncol(rv))
+
+rv.wide$visit<-rep(ID.link_corrected$timepoint,each=13)
+
+rv.wide$visit_covid<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis),each=13)
+
+rv.wide$visit_covid[grep("D0",rv.wide$visit_covid)]<-"D0"
+
+
+rv.wide$visit_covid_vaccine<-rep(paste(ID.link_corrected$timepoint,ID.link_corrected$covid_diagnosis,ID.link_corrected$vaccine),each=13)
+
+
+rv.wide$visit_covid_vaccine[grep("D0",rv.wide$visit_covid_vaccine)]<-"D0"
+rv.wide$visit_covid_vaccine[grep("D7 not",rv.wide$visit_covid_vaccine)]<-"D7_not_covid"
+rv.wide$visit_covid_vaccine[grep("CT not",rv.wide$visit_covid_vaccine)]<-"CT_not_covid"
+
+# counts per million there fore counts per hundred is cpm/10000
+rv.wide$visit %<>% factor(.,levels=c("D0","CT","D7"))
+
+rv.wide$percentage<-rv.wide$reads/10000
+
+type<-unique(rv.wide$type)
+
+aov.df<-data.frame(matrix(nrow = 1,ncol=2))
+
+for(i in 1:length(type)){
+  of.interest<-rv.wide$type==type[i]
+  res.aov<-aov(rv.wide$percentage[of.interest]~rv.wide$visit[of.interest])
+  summary<-summary(res.aov)
+  p<-summary[[1]][1,5]
+  aov.df[i,]<-c(type[i],p)
+}
+
+aov.df$FDR<-p.adjust(aov.df$X2) # significant anova for miRNA
+i=2
+of.interest<-rv.wide$type==type[i]
+res.aov<-aov(rv.wide$reads[of.interest]~rv.wide$visit[of.interest])
+
+tuckey<-TukeyHSD(res.aov)
+p<-signif(tuckey$`rv.wide$visit[of.interest]`[1,4],2)
+
+stat.test <- rv.wide %>%
+  group_by(type) %>%
+  t_test(percentage ~ visit) %>%
+  adjust_pvalue(method = "bonferroni") %>%
+  add_significance("p.adj")
+
+stat.test <- stat.test %>%
+  add_xy_position(x = "type", dodge = 0.8)
+
+stat.test<-stat.test[4,]
+
+stat.test$p<-p
+
+ggplot(rv.wide,
+       aes(y=(percentage),
+           x=type,
+           colour=visit))+
+  geom_boxplot()+
+  ylab("reads(% mapped)")+
+  xlab("class")+
+  theme_pubclean()+
+  stat_pvalue_manual(
+  stat.test, label="p",tip.length = 0  )
+
+
+rv.wide$visit_covid_vaccine %<>%as.factor(.)
+
+
+ggplot(rv.wide,
+       aes(y=(reads/10000),
+           x=type,
+           colour=visit_covid_vaccine))+
+  geom_boxplot()+
+  ylab("reads(% mapped)")+
+  xlab("class")+
+  theme_minimal()
+
+
+}
+
+
+##### Noiseq plot for paper
+
+lcpm<-readRDS(paste0(working.directory,"/lcpm.for.paper.RDS"))
+
+cpm<-apply(lcpm,2,function(x) 2^(x))
+
+cpm<-data.frame(cpm)
+cpm$rownames<-rownames(cpm)
+
+
+cpm<-cpm(total.counts4,log=F)
+
+
+cpm<-data.frame(cpm)
+cpm$rownames<-rownames(cpm)
+
+cpm$Reverse.complement<-grepl("ReverseComplement_",cpm$rownames)
+cpm$miR<-grepl("^hsa-miR-|&hsa-miR-|^hsa-let-|&hsa-let-",cpm$rownames)
+cpm$miR.hp<-grepl("^MiR.hp|&MiR.hp__",cpm$rownames)
+cpm$lncRNA<-grepl("^lncRNA__|&lncRNA__",cpm$rownames)
+cpm$protein.coding<-grepl("^ENSG|&ENSG",cpm$rownames)
+cpm$rRNA<-grepl("^rRNA__|&rRNA__",cpm$rownames)
+cpm$snoRNA<-grepl("^snoRNA__|&snoRNA__",cpm$rownames)
+cpm$snRNA<-grepl("^snRNA__|&snRNA__",cpm$rownames)
+cpm$yRNA<-grepl("^yRNA__|&yRNA__",cpm$rownames)
+cpm$vault<-grepl("^vault__&vault__",cpm$rownames)
+cpm$tRNA<-grepl("^tRNA__|&tRNA__",cpm$rownames)
+cpm$vault<-grepl("^viral.miR.hp__|&viral.miR.hp__",cpm$rownames)
+
+
+# average expression by class by person
+# so long on person
+
+cpm[cpm==T]<-1
+
+
+cpm.long<-pivot_longer(data=cpm,
+                        cols=starts_with("X"))
+
+cpm.long[,!grepl("name|value",colnames(cpm.long))] <-cpm.long[,!grepl("name|value",colnames(cpm.long))]*cpm.long$value #  multiply each element by whether its class logical (i.e. 1 if that read mapped to a that class, 0 if it did not) 
+
+
+colnames(cpm.long)
+
+cpm.long <- cpm.long %>% dplyr::group_by(name) %>% 
+  dplyr::summarise(across(colnames(cpm.long)[2:12],sum),
+            .groups = 'drop') %>%
+  as.data.frame()
+
+cpm.even.longer<-cpm.long %>% pivot_longer(!name,names_to = "class", values_to = "cpm")
+
+
+cpm.even.longer$class[grepl("protein.coding",cpm.even.longer$class)]<-"protein coding"
+cpm.even.longer$class[grepl("Reverse.complement",cpm.even.longer$class)]<-"Antisense \nto known feature"
+cpm.even.longer$class[grepl("miR\\.hp",cpm.even.longer$class)]<-"offset miRNA"
+cpm.even.longer$class[grepl("^miR$",cpm.even.longer$class)]<-"mature miR"
+
+unique(cpm.even.longer$class)
+
+
+cpm.even.longer$class %<>% factor(.,levels=c("mature miR",
+                                              "offset miRNA",
+                                             "tRNA",
+                                              "snoRNA",
+                                              "protein coding",
+                                              "lncRNA",
+                                              "snRNA",
+                                              "yRNA",
+                                              "vault",
+                                              "rRNA",
+                                              "Antisense \nto known feature"))
+
+
+ggplot(cpm.even.longer,aes(x=class,
+                            y=cpm*0.0001))+
+  geom_boxplot()+
+  xlab("RNA class")+
+  ylab("%")+
+  theme_pubr()
+
+
+
+
+
+```
+
+
+
+
+```{r create a lookup table for gene IDs for use later}
+
+ensg_list<-data.frame(rownames(total.counts4$counts))
+ensg_list<-rownames(total.counts4$counts) %>%
+  .[grep("ENSG",.)] # grab all the gene names from the gene expression matrix so tehy can be looked up biomart
+ensg_list<-gsub("ReverseComplement_","",ensg_list) # 
+#ensg_list<-gsub("\\..*","",ensg_list) # remove anything before the .
+
+# need to split up concatenated & lists for the ENSG genes
+ensg_list<-reshape2::colsplit(ensg_list,pattern = "&", names=1:1000)
+ensg_list<-ensg_list[,colSums(!is.na(ensg_list))>1]
+# now linearise
+ensg_list<-as.matrix(ensg_list)
+ensg_list<-as.character(ensg_list)
+ensg_list<-ensg_list[grep("ENSG",ensg_list)] # remove empty elements
+# now have all gene names as a list
+ensg_list%<>%data.frame(ensg_list)
+ensg_list$short<-gsub("\\..*","",ensg_list$ensg_list)
+
+
+
+ensembl <- useEnsembl(biomart = "ensembl") # set up biomart 
+ensembl <- useDataset(dataset = "hsapiens_gene_ensembl", mart = ensembl) # set up biomart some more
+
+gene_ID_list<-getBM(attributes = c("hgnc_symbol", "ensembl_gene_id"), 
+                    filters = "ensembl_gene_id", 
+                    values = ensg_list$short, bmHeader = T, mart = ensembl,
+                    useCache = FALSE) # foo is a lookup ta
+gene_ID_list<-merge(gene_ID_list,ensg_list, by.x="Gene stable ID", by.y="short",all.x=T)
+gene_ID_list<-gene_ID_list[!duplicated(gene_ID_list),]
+
+```
+
+
+
+# PCA for paper
+
+```{r}
+
+### glimma plots #####
+
+# does red-cell count effect placement on PCA?
+
+of.interest<-"T|D" # T|D means all samples will be kept
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+dim.x=1
+dim.y=2
+
+
+
+lcpm.batch.out<-removeBatchEffect(lcpm,
+                                #  covariates = Red.cell.count,
+                                  batch=participant
+)
+
+pca<-prcomp(t(lcpm[,keep]), scale=F)
+rv<-summary(pca)
+pca1<-100*(round(rv$importance[2,dim.y],2))
+pca2<-100*(round(rv$importance[2,dim.x],2))
+
+
+rownames(pca$rotation) %<>% gsub("Homo_sapiens.*SNORD","SNORD",.) %>% gsub("__",":",.)  %>% gsub("_","",.)# hack
+
+
+ID.link_corrected$timepoint_covid_vaccine<-paste0(ID.link_corrected$timepoint_covid,"_",ID.link_corrected$vaccine)
+
+timepoint_covid_vaccine<-ID.link_corrected$timepoint_covid_vaccine
+
+timepoint_covid_vaccine[grepl("D0",timepoint_covid_vaccine)]<-"Baseline"
+timepoint_covid_vaccine[grepl("CT_not_covid",timepoint_covid_vaccine)]<-"CT_not_covid"
+timepoint_covid_vaccine[grepl("D7_not_covid",timepoint_covid_vaccine)]<-"D7_not_covid"
+
+ID.link_corrected$covid_diagnosis_vaccine<-paste(ID.link_corrected$covid_diagnosis,ID.link_corrected$vaccine)
+
+ID.link_corrected$covid_diagnosis_vaccine[grepl("not_covid",ID.link_corrected$covid_diagnosis_vaccine)]<-"NAAT -ve"
+
+
+cols <- c( "Baseline" = "black",
+           "CT_had_covid_ChAdOx1" = "red", 
+           "D7_not_covid" = "azure2",
+           "CT_not_covid" = "dark grey",
+           "CT_had_covid_MenACWY"="blue",
+           "D7_had_covid_ChAdOx1"="deep pink",
+            "D7_had_covid_MenACWY" = "cyan1" ) 
+
+cols.line<-c("NAAT -ve"="grey",
+             "had_covid ChAdOx1"="red",
+             "had_covid MenACWY"="cyan4")
+  
+
+
+ID.for.PCA<-ID.link_corrected$ID
+ID.for.PCA[timepoint_covid_vaccine=="Baseline"]<-NA
+
+# line colour - want it to be diag_vaccine
+
+rownames(pca$rotation)[duplicated(rownames(pca$rotation))] %<>% paste0(.,1:length(.))
+
+var.plot.1.2<-fviz_pca_biplot(pca,
+                axes = c(1,2),
+                select.var = list(cos2 = 3),
+                alpha=1,
+                col.ind = "white",
+                gradient.cols = c("#E7B800", "#FC4E07"),
+                col.var="contrib",
+                repel = TRUE,
+                labelsize =3)+
+  ggtitle("variables plot")
+
+
+var.plot.3.4<-fviz_pca_biplot(pca,
+                              axes = c(3,4),
+                              select.var = list(cos2 = 3),
+                              geom="point",
+                              alpha=1,
+                              col.ind = "white",
+                              gradient.cols = c("#E7B800", "#FC4E07"),
+                              col.var="contrib",
+                              repel = TRUE,
+                              labelsize =3)+
+  ggtitle("variables plot")
+
+
+
+
+pca.timepoint.1.2<- fviz_pca_ind(pca,
+                                   axes = c(1,2),
+                                   select.var = list(cos2 = 2),
+                                   col.ind = timepoint_covid_vaccine,
+                                   ellipse.level = 0.95,
+                                   ellipse.type = c("confidence"),
+                                   ellipse.alpha = 0.2,
+                                   geom="point",
+                                   alpha=0,
+                              #     addEllipses=TRUE,
+                                   col.var ="dark green",
+                                   axes.linetype=NA,
+                                   invisible="quali")+
+  ggtitle("")+
+  theme(axis.title=element_text(size=10,face="bold"),
+        legend.position = "right")+
+  scale_color_manual(
+    name="Timepoint",
+    values=cols)+
+  scale_fill_manual(
+    name="Timepoint",
+    values=cols)+
+  geom_point(aes(colour=timepoint_covid_vaccine),
+             size = 3, alpha=0.5)+
+  theme_nothing()+
+  stat_ellipse(aes(group=timepoint_covid_vaccine,colour=timepoint_covid_vaccine))+
+  new_scale_color()+
+  # geom_line(aes(group=ID.for.PCA,
+  #               col=ID.link_corrected$covid_diagnosis_vaccine))+
+  # scale_color_manual(values=cols.line)
+  geom_line(aes(group=ID.for.PCA),
+            arrow = arrow(length=unit(0.30,"cm"), 
+                          ends="first", 
+                          type = "open"),
+            linetype="dashed", 
+            colour="grey",alpha=0.5)+
+  theme_cowplot()+
+  theme(legend.position="none",
+        axis.line = element_blank())
+
+
+pca.timepoint.3.4<-fviz_pca_ind(pca,
+                                   axes = c(3,4),
+                                   select.var = list(cos2 = 2),
+                                   col.ind = timepoint_covid_vaccine,
+                                   ellipse.level = 0.95, 
+                                   ellipse.type = c("confidence"),
+                                   ellipse.alpha = 0.2,
+                                   geom="point",
+                                   alpha=0,
+                               #    addEllipses=TRUE,
+                                   col.var ="dark green",
+                                   axes.linetype=NA,
+                                   invisible="quali")+
+  ggtitle("")+
+  theme(axis.title=element_text(size=10,face="bold"),
+        legend.position = "right")+
+    stat_ellipse(aes(group=timepoint_covid_vaccine,colour=timepoint_covid_vaccine))+
+  scale_color_manual(
+    name="Timepoint",
+    values=cols)+
+  scale_fill_manual(
+    name="Timepoint",
+    values=cols)+
+  geom_point(aes(colour=timepoint_covid_vaccine),
+             size = 3, alpha=0.5)+
+  theme_nothing()+
+  new_scale_color()+
+  # geom_line(aes(group=ID.for.PCA,
+  #               col=ID.link_corrected$covid_diagnosis_vaccine))+
+  # scale_color_manual(values=cols.line)
+  geom_line(aes(group=ID.for.PCA),
+            arrow = arrow(length=unit(0.30,"cm"), 
+                          ends="first", 
+                          type = "open"),
+            linetype="dashed", 
+            colour="grey",alpha=0.5)+
+  theme_cowplot()+
+  theme(legend.position="none",
+        axis.line = element_blank())
+
+
+
+
+
+plot.for.legend<-ggplot(mapping=aes(colour=timepoint_covid_vaccine,
+      y=1,
+      x=1))+
+  geom_point()+
+  scale_color_manual(
+    name="Timepoint",
+    labels=c("Baseline"="D0",
+             CT_had_covid_ChAdOx1="CT_NAAT_pos_ChAdOx",
+             D7_had_covid_ChAdOx1="CT+7_NAAT_pos_ChAdOx",
+             D7_not_covid="CT+7_NAAT_neg",
+             CT_not_covid="CT_NAAT_neg",
+             CT_had_covid_MenACWY="CT_NAAT_pos_MenACWY",
+             D7_had_covid_MenACWY="CT+7_NAAT_pos_MenACWY"
+             ),
+    values=cols)
+  
+
+legend<-get_legend(plot.for.legend+theme(legend.position = "bottom"))
+
+
+
+
+empty<-ggplot(mapping=aes(y=1,x=1))+
+  theme_nothing()
+
+
+var.plot<-plot_grid(empty,var.plot.1.2,empty,var.plot.3.4,
+          nrow=1)
+
+
+
+PCA.plot<-plot_grid(pca.timepoint.1.2,pca.timepoint.3.4,
+                   labels=c("AUTO"),
+                   nrow=1)
+
+pdf("COV.stage2.PCA.FOR.PAPER.batch.removed.pdf", width=11, height=8)
+
+pdf("COV.stage2.PCA.FOR.PAPER.data.ellipses.pdf", width=11, height=8)
+
+plot_grid(var.plot,PCA.plot,legend,
+          nrow=3,
+          rel_heights = c(1,2,1))
+
+dev.off()
+
+
+```
+
+
+```{r  glimma plots, eval=FALSE}
+### glimma plots #####
+
+# does red-cell count effect placement on PCA?
+
+of.interest<-"T|D" # T|D means all samples will be kept
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+dim.x=1
+dim.y=2
+
+pca<-prcomp(t(lcpm[,keep]), scale=F)
+rv<-summary(pca)
+pca1<-100*(round(rv$importance[2,dim.y],2))
+pca2<-100*(round(rv$importance[2,dim.x],2))
+
+glMDSPlot(lcpm[,keep],
+          group=as.character(ID.link_corrected$timepoint_covid[keep]),
+          labels=ID.link_corrected$original_sample_name[keep])
+
+# people's two flow cell samps almost overly each other
+
+ggplot(mapping=aes(y=pca$x[,dim.y],
+                   x=pca$x[,dim.x],
+                   colour=timepoint.diagnosis.vaccine[keep],
+                   label=participant[keep]))+
+  geom_point(size=5,alpha=0.7)+
+#  geom_text()+
+  ggtitle("lcpm")+
+  theme_classic()+
+  labs(color='LEGEND') +
+  #theme(legend.position = 'none')
+  xlab(paste0("PCA",dim.x," (",pca2,"% of variance)"))+
+  ylab(paste0("PCA",dim.y," (",pca1,"% of variance)"))
+ # stat_ellipse(geom = "polygon", alpha = 0.1,level=0.95,
+ #               aes(fill = timepoint.diagnosis.vaccine[keep]))+
+ #  theme(        axis.text = element_text(size=20, angle=0),
+ #                axis.title = element_text(face="bold",size=20))
+
+
+of.interest<-"T|D" # T|D means all samples will be kept
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+
+of.interest<-"CT_had_covid_MenACWY|CT_had_covid_ChAdOx1|D0_not_covid"
+
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+
+pca<-prcomp(t(lcpm[,keep]), scale=F)
+rv<-summary(pca)
+pca1<-100*(round(rv$importance[2,dim.y],2))
+pca2<-100*(round(rv$importance[2,dim.x],2))
+
+dim.x=1
+dim.y=2
+
+ggplot(mapping=aes(y=pca$x[,dim.y],
+                   x=pca$x[,dim.x],
+                   colour=(timepoint.diagnosis.vaccine[keep]),
+                   label=participant[keep]))+
+  geom_point(size=5,alpha=0.7)+
+#  geom_text()+
+  ggtitle("lcpm")+
+  theme_classic()+
+  labs(color='LEGEND') +
+  #theme(legend.position = 'none')
+  xlab(paste0("PCA",dim.x," (",pca2,"% of variance)"))+
+  ylab(paste0("PCA",dim.y," (",pca1,"% of variance)"))+
+ stat_ellipse(geom = "polygon", alpha = 0.1,level=0.95,
+               aes(colour =timepoint.diagnosis.vaccine[keep]), fill="white")+
+  theme(        axis.text = element_text(size=20, angle=0),
+                axis.title = element_text(face="bold",size=20))
+
+
+
+
+#glMDSPlot(lcpm.batch.removed[,keep],labels = participant[keep], group=as.character(timepoint.diagnosis.vaccine[keep]))
+#,labels = participant[keep])
+
+
+of.interest<-"CT_had_covid_MenACWY|D7_had_covid_MenACWY"
+
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+glMDSPlot(lcpm[,keep],labels = participant[keep], group=as.character(timepoint.diagnosis.vaccine[keep]),
+          main = of.interest)
+
+of.interest<-"ChAdOx1" # T|D means all samples will be kept
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+dim.x=2
+dim.y=3
+
+pca<-prcomp(t(lcpm.batch.removed[,keep]), scale=F)
+rv<-summary(pca)
+pca1<-100*(round(rv$importance[2,dim.y],2))
+pca2<-100*(round(rv$importance[2,dim.x],2))
+
+
+ggplot(mapping=aes(y=pca$x[,dim.y],
+                   x=pca$x[,dim.x],
+                   colour=(timepoint.diagnosis.vaccine[keep]),
+                   label=participant[keep]))+
+  geom_point(size=5,alpha=0.7)+
+#  geom_text()+
+  ggtitle("lcpm")+
+  theme_classic()+
+  labs(color='LEGEND') +
+  #theme(legend.position = 'none')
+  xlab(paste0("PCA",dim.x," (",pca2,"% of variance)"))+
+  ylab(paste0("PCA",dim.y," (",pca1,"% of variance)"))
+ # stat_ellipse(geom = "polygon", alpha = 0.1,level=0.95,
+ #               aes(fill = timepoint.diagnosis.vaccine[keep]))+
+ #  theme(        axis.text = element_text(size=20, angle=0),
+ #                axis.title = element_text(face="bold",size=20))
+
+
+
+lcpm.batch.out.red.cells.only<-removeBatchEffect(lcpm,
+                                   covariates = Red.cell.count)
+
+
+lcpm.batch.out<-removeBatchEffect(lcpm,
+                                   covariates = Red.cell.count,
+                                  batch=participant
+                                )
+
+
+of.interest<-"D0_not_covid|CT_had_covid_ChAdOx1|CT_had_covid_MenACWY"
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+pca<-prcomp(t(lcpm.batch.out[,keep]), scale=T)
+rv<-summary(pca)
+pca1<-100*(round(rv$importance[2,1],2))
+pca2<-100*(round(rv$importance[2,2],2))
+
+ggplot(mapping=aes(y=pca$x[,1],
+                   x=pca$x[,2],
+                   colour=paste(timepoint.diagnosis.vaccine[keep]),
+                   label=participant[keep]))+
+  geom_point(size=5,alpha=0.7)+
+  geom_text()+
+  theme_classic()+
+  labs(color='LEGEND') +
+  #theme(legend.position = 'none')
+  xlab(paste0("PCA2 (",pca2,"% of variance)"))+
+  ylab(paste0("PCA1 (",pca1,"% of variance)"))+
+  stat_ellipse(geom = "polygon", alpha = 0.1,level=0.95,
+               aes(fill = timepoint.diagnosis.vaccine[keep]))+
+  theme(        axis.text = element_text(size=20, angle=0),
+                axis.title = element_text(face="bold",size=20))
+
+
+
+
+ggplot(mapping=aes(y=pca$x[,1],
+                   x=pca$x[,2],
+                   colour=paste(Red.cell.count[keep]),
+                   label=participant[keep]))+
+  geom_point(size=5,alpha=0.7)+
+  geom_text()+
+  theme_classic()+
+  labs(color='LEGEND') +
+  #theme(legend.position = 'none')
+  xlab(paste0("PCA2 (",pca2,"% of variance)"))+
+  ylab(paste0("PCA1 (",pca1,"% of variance)"))+
+  stat_ellipse(geom = "polygon", alpha = 0.1,level=0.95,
+               aes(fill = timepoint.diagnosis.vaccine[keep]))+
+  theme(        axis.text = element_text(size=20, angle=0),
+                axis.title = element_text(face="bold",size=20))
+
+
+
+
+
+
+of.interest<-"C|D" #C|D means keep everything
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+glMDSPlot(lcpm.batch.out[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+
+of.interest<-"MenACWY" #C|D means keep everything
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+glMDSPlot(lcpm.batch.out[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+glMDSPlot(lcpm.batch.out.red.cells.only[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+
+of.interest<-"ChAdOx1" #C|D means keep everything
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+glMDSPlot(lcpm.batch.out[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+
+
+of.interest<-"CT" #C|D means keep everything
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+glMDSPlot(lcpm.batch.out[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+glMDSPlot(lcpm.batch.out.red.cells.only[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+
+
+of.interest<-"D7_had_covid" #C|D means keep everything
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+glMDSPlot(lcpm.batch.out[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+glMDSPlot(lcpm.batch.out.red.cells.only[,keep],group=timepoint.diagnosis.vaccine[keep],labels = participant[keep])
+
+
+# tSNE
+
+
+
+of.interest<-"CT_had_covid_MenACWY|CT_had_covid_ChAdOx1"
+keep<-grepl(of.interest,timepoint.diagnosis.vaccine)
+
+
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(t(lcpm.batch.out[,keep]), dims = 2, perplexity=2, verbose=TRUE, max_iter = 1000)
+
+## Plotting
+ggplot(data.frame(tsne$Y),
+       aes(y=X2,
+           x=X1,
+           colour=as.factor(ID.link_corrected$ID[keep])))+
+  geom_point()+
+  theme_pubr()
+         
+ggplot(data.frame(tsne$Y),
+       aes(y=X2,
+           x=X1,
+           colour=ID.link_corrected$timepoint[keep]))+
+  geom_point()+
+  theme_pubr()
+         
+ggplot(data.frame(tsne$Y),
+       aes(y=X2,
+           x=X1,
+           colour=timepoint.diagnosis[keep]))+
+  geom_point()+
+  theme_pubr()
+         
+ggplot(data.frame(tsne$Y),
+       aes(y=X2,
+           x=X1,
+           colour=timepoint.diagnosis.vaccine[keep]))+
+  geom_point()+
+  theme_pubr()
+         
+
+
+
+
+```
+
+
+
+```{r  create QC plots and folder name, eval=FALSE}
+
+
+##  QC plots ######
+
+
+  summary(colSums(total.counts.raw$counts)) # shows min, max, median library sizes etc
+  
+  boxplot(colSums(total.counts.raw$counts), 
+          main="distribution of library sizes across all samples",
+          ylab="raw library size (counts)")
+  
+  # identify the name of the library with the smallest library size
+  
+  min.lib.size<-colnames(total.counts.raw)[colSums(total.counts.raw$counts)==min(colSums(total.counts.raw$counts))]
+  paste("sample with the smallest library size =", min.lib.size)
+  
+  max.lib.size<-colnames(total.counts.raw)[colSums(total.counts.raw$counts)==max(colSums(total.counts.raw$counts))]
+  paste("sample with the largest library size =", max.lib.size)
+  
+  
+  
+  ## how many genes are detected in each sample etc?
+  
+  
+  no.genes.detected.per.sample<-colSums(total.counts.raw$counts>0)
+  summary(no.genes.detected.per.sample) # # shows min, max, median number of genes detected in each sampl
+  
+  boxplot(no.genes.detected.per.sample, 
+          main="distribution of number of genes detected across all samples",
+          ylab="number of genes detected in libraries prior to processing")
+  
+  # identify the name of the library with the fewest genes detected
+  
+  min.no.genes.in.a.sample<-colnames(total.counts.raw)[colSums(total.counts.raw$counts>0)==min(colSums(total.counts.raw$counts>0))]
+  paste("sample with the fewest genes detected =", min.no.genes.in.a.sample)
+  
+  max.no.genes.in.a.sample<-colnames(total.counts.raw)[colSums(total.counts.raw$counts>0)==max(colSums(total.counts.raw$counts>0))]
+  paste("sample with the fewest genes detected =", max.no.genes.in.a.sample)
+  
+  
+  
+  ### plot a bar graph of number of genes detected in each sample, organised by participant ID -- allows you to see quickly which samples have fewest number of genes etc. Colour corresponds to participant ID
+  
+  
+  pdf("Number of genes detected in each sample.pdf",height=4, width=10)
+  
+  plot<-total.counts.raw[,order(colnames(total.counts.raw))]
+  
+  no.rows.to.plot.over<-5 ### decide how many rows you want to spread your plot over ----
+  
+  no.samples.per.row<-nsamples/no.rows.to.plot.over
+  
+  ggplot(mapping=aes(y=colSums(plot$counts>0)[1:ceiling(no.samples.per.row)],
+                     x=colnames(plot)[1:ceiling(no.samples.per.row)],
+                     fill=stri_sub(colnames(plot)[1:ceiling(no.samples.per.row)],1,7)))+
+    geom_col()+
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 90, hjust = 1))+
+    ggtitle("number of genes detected in each sample")+
+    ylab("number of genes detected")+
+    xlab("sample name")
+  
+  
+  
+  for ( i in 2:(no.rows.to.plot.over-1)){
+    g<-ggplot(mapping=aes(
+      y=colSums(plot$counts>0)[((i-1)*ceiling(no.samples.per.row)+1):(i*ceiling(no.samples.per.row))],
+      x=colnames(plot)[((i-1)*ceiling(no.samples.per.row)+1):(i*ceiling(no.samples.per.row))],
+      fill=stri_sub(colnames(plot)[((i-1)*ceiling(no.samples.per.row)+1):(i*ceiling(no.samples.per.row))],1,7)))+
+      geom_col()+
+      theme(legend.position = "none",
+            axis.text.x = element_text(angle = 90, hjust = 1))+
+      ggtitle("number of genes detected in each sample")+
+      ylab("number of genes detected")+
+      xlab("sample name")
+
+    print(g)
+    print(i)
+    
+  }
+  
+  ggplot(mapping=aes(y=colSums(plot$counts>0)[((i)*ceiling(no.samples.per.row)+1):nsamples],
+                     x=colnames(plot)[((i)*ceiling(no.samples.per.row)+1):nsamples],
+                     fill=stri_sub(colnames(plot)[((i)*ceiling(no.samples.per.row)+1):nsamples],1,7)))+
+    geom_col()+
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 90, hjust = 1))+
+    ggtitle("number of genes detected in each sample")+
+    ylab("number of genes detected")+
+    xlab("sample name")
+  
+  dev.off()
+  
+  
+  ##### create graphs of the distribution of count data pre noise removal, post noise removal, and after the two different types of normalisation. Boxplots coloured to make them pretty, but the colour doesn't actually mean anything####
+  
+  col <- rand_color(nsamples, hue = NULL, luminosity = "bright", transparency = 0)
+  
+  ## create a new folder in your working directory to export the QC plots to.
+  folder<-paste0(path,"/QC plots") # this is the name of the folder where your QC plots will be exported to
+  dir.create(folder)
+  
+  
+  
+  #density plot of abundances - you may not be able to see sample names in these plots if there are lots of samples.
+  
+  ### pre noise removal ### 
+  
+  jpeg(paste0(folder,"/Box plot of distribution of abundances pre noise removal.jpeg"), width = 1800, height = 900,quality = 100)
+  
+  boxplot(lcpm.raw, las=2, cex.axis=0.5, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm.raw)))
+  title(main=paste0("Box plot of distribution of abundances pre noise removal"),ylab="Log-cpm")
+  
+  dev.off()
+  
+  
+  ## or if you want to plot your sample over n number of rows several rows use the following code....
+  
+  jpeg(paste0(folder,"/Box plot of distribution of abundances pre noise removal_2.jpeg"), width = 1800, height = 900,quality = 100)
+  
+  no.rows.to.plot.over<-3 ### decide how many rows you want to spread your plot over ----
+  
+  no.samples.per.row<-nsamples/no.rows.to.plot.over
+  
+  par(mfrow=c(no.rows.to.plot.over,1),mar=c(8,8,2,2))
+  
+  boxplot(lcpm.raw[,1:ceiling(no.samples.per.row)], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm.raw)))
+  title(main=paste0("Box plot of distribution of abundances pre noise removal"),ylab="Log-cpm")
+  
+  for ( i in 2:(no.rows.to.plot.over-1)){
+    boxplot(lcpm.raw[,((i-1)*ceiling(no.samples.per.row)+1):(i*ceiling(no.samples.per.row))], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm.raw)))
+  }
+  
+  boxplot(lcpm.raw[,((i)*ceiling(no.samples.per.row)+1):nsamples], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm.raw)))
+  
+  dev.off()
+  
+  
+  
+  ### After noise removal and  normalisation ### 
+  
+  
+  
+  
+  
+  jpeg(paste0(folder,"/Box plot of distribution of abundances post noise removal, ",normalisation.method," normalisation.jpeg"), width = 1800, height = 900,quality = 100)
+  
+  boxplot(lcpm, las=2, col=col, main="",ylim=c(0,max(lcpm)))
+  title(main=paste0("Box plot of distribution of abundances post noise removal, Qauntile normalisation"),ylab="Log-cpm")
+  
+  boxplot(lcpm[,1:ceiling(no.samples.per.row)], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm)))
+  
+  title(main=paste0("Box plot of distribution of abundances pre noise removal"),ylab="Log-cpm")
+  
+  for ( i in 2:(no.rows.to.plot.over-1)){
+    boxplot(lcpm[,((i-1)*ceiling(no.samples.per.row)+1):(i*ceiling(no.samples.per.row))], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm)))
+  }
+  
+  boxplot(lcpm[,((i)*ceiling(no.samples.per.row)+1):ncol(lcpm)], las=2, cex.lab=0.5, col=col, main="",ylim=c(0,max(lcpm)))
+  
+  
+  
+  dev.off()
+  
+  ################# Distribution of abundance, density plots ####
+  
+  pdf(paste0(folder,"/Distribution of abundance, density plots.pdf"))
+  
+  par(mfrow=c(2,2),mar=c(4,4,2,2))
+  
+  ### pre noise removal ### 
+  
+  plot(density(lcpm.raw[,1]), lwd=2, ylim=c(0,1), xlim=c(-5,15), las=2,
+       main="", xlab="")
+  abline(v=0, lty=3)
+  title(main="Distribution of abundances pre noise removal", xlab="Log2-cpm",cex.main=0.8)
+  for(i in 2:nsamples){
+    den <- density(lcpm.raw[,i])
+    lines(den$x, den$y, col=col[i], lwd=1)
+  }
+  
+  
+  
+  ### After noise removal and quantile normalisation ### 
+  
+  plot(density(lcpm[,1]), lwd=2,  ylim=c(0,1), xlim=c(-5,15), las=2,
+       main="", xlab="")
+  abline(v=0, lty=3)
+  title(main="Distribution of abundances post noise removal, \n ",normalisation.method," normalisation", xlab="Log2-cpm",cex.main=0.8)
+  for(i in 2:ncol(lcpm)){
+    den <- density(lcpm[,i])
+    lines(den$x, den$y, col=col[i], lwd=1)
+  }
+  
+  
+  dev.off()
+  
+  
+  ## MA plots ########
+
+
+  # compare a sample to the average of expression in the person's other samples...
+  
+  # After noise removal ### 
+  
+  MA.plots.all(x=lcpm,
+               info=ID.link_corrected$ID,
+               pdf.title="MA plots post noise removal and normalisation",
+               folder=folder)
+  
+  MA.plots.vs.everythingelse(x=lcpm,
+                             info=ID.link_corrected$ID,
+                             pdf.title="MA plots post noise removal and normalisation",
+                             folder=folder)
+ 
+  dev.off()
+
+dev.off()
+```
+
+
+
+```{r  Do differential expression analysis using limma voom}
+#### Do differential expression analysis using limma voom ######
+
+
+contrast.options<-data.frame(matrix(nrow=1,ncol=2))
+decideTests.final<-data.frame(matrix(nrow=1,ncol=3))
+colnames(decideTests.final)<-c("Down","NotSig","Up")
+
+colnames(contrast.options)<-c("contrast_number","contrast_name") # useful for if you want to see what contrasts have been created.
+
+source(contrast.matracies)
+fit2.final<-list()
+```
+
+
+```{r  Do differential expression analysis using limma voom DUPLICATE COR, eval=TRUE}
+
+
+if(analysis.setup==3){ # do a paired analysis
+
+
+for (i in 1:length(design.options))
+{
+  
+  design<-get(design.options[i])  # select a design matrix from assigned objects using get ()
+  
+  
+  cm<-get(cm.options[i])
+  
+  contrasts<-colnames(cm)
+  contrast.options[nrow(contrast.options)+1:length(contrasts),2]<-contrasts
+  
+  print(i)
+  
+  # 2. Apply Voom ######
+  
+  y<-DGEList(total.counts4)
+  
+  v <- voom(y, design, plot=FALSE,normalize.method = "none") # normalize.method = "none" because you have already normalised your count data
+  
+  
+  # 3. identify the effect of the participant - voom will use this later when applying the model
+
+  corfit <- duplicateCorrelation(v,design,block=participant) # ? is this correct?
+  corfit$consensus
+
+
+  # 4. redo the voom and duplicate correlation steps as per instructions at:
+
+  v <- # voom the original object again, but now with the info from duplicate correlation
+    voom(y,
+         design,
+         correlation=corfit$consensus,
+         block=participant,
+         normalize.method = "none",
+         plot=FALSE) #
+
+
+  corfit <- duplicateCorrelation(v,design,block=participant) # ? is this correct?
+  corfit$consensus  #minor change to previous correlation
+
+
+  fit <- lmFit(v,design,block=participant,correlation=corfit$consensus)
+  
+  fit2 <- contrasts.fit(fit, cm)
+  fit2 <- eBayes(fit2)
+  
+  
+  assign(paste0("fit2",cm.options[i]),fit2)
+  
+  fit2.final[[i]]<-fit2
+  
+  decideTests.tmp<-t(summary(decideTests(fit2)))
+  
+  decideTests.tmp<-as.data.frame.matrix(decideTests.tmp)
+  
+  decideTests.final<-rbind(decideTests.final,decideTests.tmp)## a summary othe number of differentially expressed genes in for each comparison
+  
+} ## fits contrast matrix to each design model and assigns the output to the global environment (fit2.final, decideTests.final)
+
+
+contrast.options<-contrast.options[!is.na(contrast.options[,2]),] # remove first row which was created during creation of dataframe
+
+contrast.options[,1]<-1:nrow(contrast.options)
+
+
+  saveRDS(fit2.final, file=paste0(folder2,"/voom object.RDS"))
+  write.csv(decideTests.final, file=paste0(folder2,"/COVID stage2 results summary for each contrast.csv"))
+  pdf.file.name<-"Volcano plots.pdf"## name of the pdf file that is going to contain your volcano
+} else if (analysis.setup==1|analysis.setup==2) { # unpaired analysis
+  
+  
+for (i in 1:length(design.options))
+{
+  
+ design<-get(design.options[i])  # select a design matrix from assigned objects using get ()
+  
+  
+  cm<-get(cm.options[i])
+  
+  contrasts<-colnames(cm)
+  contrast.options[nrow(contrast.options)+1:length(contrasts),2]<-contrasts
+  
+  print(i)
+  
+  # 2. Apply Voom ######
+  
+  y<-DGEList(total.counts4)
+  
+  v <- voom(y, design, plot=FALSE,normalize.method = "none") # normalize.method = "none" because you have already normalised your count data
+  
+  
+  # 3. identify the effect of the participant - voom will use this later when applying the model
+
+  corfit <- duplicateCorrelation(v,design,block=flowcell) # ? is this correct?
+  corfit$consensus
+
+
+  # 4. redo the voom and duplicate correlation steps as per instructions at:
+
+  v <- # voom the original object again, but now with the info from duplicate correlation
+    voom(y,
+         design,
+         correlation=corfit$consensus,
+         block=flowcell,
+         normalize.method = "none",
+         plot=FALSE) #
+
+
+  corfit <- duplicateCorrelation(v,design,block=flowcell) # ? is this correct?
+  corfit$consensus  #minor change to previous correlation
+
+
+  fit <- lmFit(v,design,block=flowcell,correlation=corfit$consensus)
+  
+  fit2 <- contrasts.fit(fit, cm)
+  fit2 <- eBayes(fit2)
+
+  
+  assign(paste0("fit2",cm.options[i]),fit2)
+  
+  fit2.final[[i]]<-fit2
+  
+  decideTests.tmp<-t(summary(decideTests(fit2)))
+  
+  decideTests.tmp<-as.data.frame.matrix(decideTests.tmp)
+  
+  decideTests.final<-rbind(decideTests.final,decideTests.tmp)## a summary othe number of differentially expressed genes in for each comparison
+  
+} ## fits contrast matrix to each design model and assigns the output to the global environment (fit2.final, decideTests.final)
+
+
+contrast.options<-contrast.options[!is.na(contrast.options[,2]),] # remove first row which was created during creation of dataframe
+
+contrast.options[,1]<-1:nrow(contrast.options)
+
+
+  saveRDS(fit2.final, file=paste0(folder2,"/voom object.RDS"))
+  write.csv(decideTests.final, file=paste0(folder2,"/stage2 results summary for each contrast.csv"))
+  pdf.file.name<-"Volcano plots.pdf"## name of the pdf file that is going to contain your volcano
+  
+  }
+
+#write.csv(file="all.analysis.1.csv",decideTests.final)
+#write.csv(file="all.analysis.2.csv",decideTests.final)
+#write.csv(file="all.analysis.3.csv",decideTests.final)
+
+
+```
+
+
+
+```{r  Output results in graphical forms}
+####### Output results in graphical forms ##############
+
+signif.DE<-NA
+
+
+  tmp<-NULL # 
+  contrast.options[,ncol(contrast.options)+1] <- NA # add an ampty column on the end
+  contrast.options[,ncol(contrast.options)+1] <- NA # add another empty column on the end
+  
+  colnames(contrast.options)[3:4]<-c("j","i")
+  for(j in 1:length(fit2.final)){
+    for (i in 1:length(colnames(fit2.final[[j]]$contrasts)))
+    {
+      
+      result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T) # to change the number of top genes to select alter n= argument. NB in the manual it uses topTreat instead of topTable when treat has been used. The two functions are the same though. 
+      
+      tmp<-c(tmp,"count") # tmp is essentially a counter which is always the same length as how far through contrast.options you have gone
+      contrast.options[length(tmp),3]<-j
+      contrast.options[length(tmp),4]<-i
+      
+      FDR.cutoff<-0.05
+      
+          add.this.to.list<-rownames(result[result$adj.P.Val<=FDR.cutoff,]) ## create a list of genes which have been DE in any analysis
+    if(grepl("all|any",colnames(fit2.final[[j]]$contrasts)[i])){
+      add.this.to.list<-NULL
+    }
+                               
+    signif.DE <- c(signif.DE,rownames(result[result$adj.P.Val<FDR.cutoff,])) 
+    
+    }
+  }
+
+signif.DE<-signif.DE[!is.na(signif.DE)]
+signif.DE<-unique(signif.DE)
+
+# EXT.analysis.1<-fit2.final
+# EXT_contrast.options_analysis.1<-contrast.options
+
+# EXT.analysis.2<-fit2.final
+# EXT_contrast.options_analysis.2<-contrast.options
+
+# EXT.analysis.3<-fit2.final
+# EXT_contrast.options_analysis.3<-contrast.options
+
+
+
+
+# save(EXT.analysis.1, EXT.analysis.2, EXT.analysis.3,
+#      EXT_contrast.options_analysis.1,EXT_contrast.options_analysis.2,EXT_contrast.options_analysis.3,
+#      file = paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+cat(collapse.option,":",which.seqs,": anlaysis setup=",analysis.setup, "\n",contrast.matracies) 
+
+cat(folder2)
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+```
+
+```{r take genes that were DE in a valid analysis and only correct for these when comparing vaccines}
+of.interest<-"CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx___does.vaccination.ameliorate.acute.covid"
+
+j<-contrast.options[contrast.options$contrast_name==of.interest,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest,]$i
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+restricted.result<-result[rownames(result)%in%signif.DE.acrosss.all.analyses,]
+restricted.result$my_adjusted_FDR<-p.adjust(restricted.result$P.Value,method="fdr")
+
+print(paste(of.interest," = ",sum(restricted.result$my_adjusted_FDR<0.05)))
+
+
+of.interest<-"D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY"
+
+j<-contrast.options[contrast.options$contrast_name==of.interest,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest,]$i
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+restricted.result<-result[rownames(result)%in%signif.DE.acrosss.all.analyses,]
+restricted.result$my_adjusted_FDR<-p.adjust(restricted.result$P.Value,method="fdr")
+
+print(paste(of.interest," = ",sum(restricted.result$my_adjusted_FDR<0.05)))
+
+
+of.interest<-"diff.diff_CT_D7_MEN_vs_CHADOX"
+
+j<-contrast.options[contrast.options$contrast_name==of.interest,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest,]$i
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+restricted.result<-result[rownames(result)%in%signif.DE.acrosss.all.analyses,]
+restricted.result$my_adjusted_FDR<-p.adjust(restricted.result$P.Value,method="fdr")
+
+print(paste(of.interest," = ",sum(restricted.result$my_adjusted_FDR<0.05)))
+
+```
+
+```{r confirmation from stage1}
+
+# load stage1 results
+
+load(paste0(working.directory,"/COVID_stage1_sRNA_analyses_results_fit_object.RData"))
+
+
+
+# select correct stage1 analysis
+if(analysis.setup==1){stage1.fit2.final<-pilot.analysis.1
+  stage1.contrast.options<-pilot_contrast.options_analysis.1
+}else if (analysis.setup==2){stage1.fit2.final<-pilot.analysis.2
+  stage1.contrast.options<-pilot_contrast.options_analysis.2
+} else if (analysis.setup==3){stage1.fit2.final<-pilot.analysis.3
+  stage1.contrast.options<-pilot_contrast.options_analysis.3
+} 
+
+
+of.interest<-"CT.had.COVID.MEN_vs_CT.not.covid___do.cov.naive.people.show.DE.compared.with.all.other.CTs" 
+#
+#D7.had.COVID.MEN_vs_D0_any
+
+j<-contrast.options[contrast.options$contrast_name==of.interest,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest,]$i
+
+colnames(fit2.final[[j]]$contrasts)[i]
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+
+stage1.of.interest<-"CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX" 
+
+j<-stage1.contrast.options[stage1.contrast.options$contrast_name==stage1.of.interest,]$j
+i<-stage1.contrast.options[stage1.contrast.options$contrast_name==stage1.of.interest,]$i
+colnames(stage1.fit2.final[[j]]$contrasts)[i]
+
+stage1.result<-topTable(stage1.fit2.final[[j]], coef=colnames(stage1.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(stage1.fit2.final[[1]]), confint = T)
+stage1.result<-cbind(rownames(stage1.result),stage1.result)
+
+
+# which extension results were validated by the stage1?
+
+table(rownames(result[result$adj.P.Val<0.05,])%in%rownames(stage1.result)) # for CT vs D0, 25% of FDR genes did not exist in the stage1
+
+FDR.signif.extension<-rownames(result[result$adj.P.Val<0.05,])
+FDR.signif.extension<-FDR.signif.extension[FDR.signif.extension%in%rownames(stage1.result)] # these are the FDR genes that existed in the stage1
+table(FDR.signif.extension%in%rownames(stage1.result[stage1.result$P.Value<0.05,])) #most have not validated.
+
+FDR.signif.extension[!FDR.signif.extension%in%rownames(stage1.result[stage1.result$P.Value<0.05,])][2] #most have not validated.
+
+# which stage1 results were validated by the extension?
+
+table(rownames(stage1.result[stage1.result$P.Value<0.05,])%in%rownames(result)) # 
+
+
+p_val.signif.stage1<-rownames(stage1.result[stage1.result$P.Value<0.05,]) # signif stage1
+p_val.signif.stage1<-p_val.signif.stage1[p_val.signif.stage1%in%rownames(result)] # these are the FDR genes that existed in the stage1
+table(p_val.signif.stage1%in%rownames(result[result$adj.P.Val<0.05,])) #about half have validated
+
+
+## do a cross plot
+
+result<-result[order(rownames(result)),]
+
+stage1.result<-stage1.result[order(rownames(stage1.result)),]
+
+result.cross.plot<-result[rownames(result)%in%rownames(stage1.result),]
+stage1.result.cross.plot<-stage1.result[rownames(stage1.result)%in%rownames(result),]
+
+table(rownames(stage1.result.cross.plot)==rownames(result.cross.plot)) # a check
+
+ggplot(mapping = aes( x=result.cross.plot$logFC,
+                      y=stage1.result.cross.plot$logFC,
+                      colour=result.cross.plot$adj.P.Val<0.05))+
+  geom_point()+
+  ggtitle(stage1.of.interest)+
+  geom_smooth(method=lm, colour="forest green", se=F, fullrange=T)+
+  geom_abline(slope=1, intercept = 0, lty=2)+
+  ylim(c(
+    -1*(max(abs(c(result.cross.plot$logFC,stage1.result.cross.plot$logFC)))),
+    max(abs(c(result.cross.plot$logFC,stage1.result.cross.plot$logFC)))
+  )
+  )+
+  xlim(c(
+    -1*(max(abs(c(result.cross.plot$logFC,stage1.result.cross.plot$logFC)))),
+    max(abs(c(result.cross.plot$logFC,stage1.result.cross.plot$logFC)))
+  )
+  )+
+  theme_minimal()+
+  labs(colour="FDR<0.05")+
+  xlab(paste("log FC for Extension"))+
+  ylab(paste("log FC Pilot"))+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)
+
+
+
+```
+
+
+```{r volcanos}
+
+load(paste0(working.directory,"/COVID_stage1_sRNA_analyses_results_fit_object.RData"))
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+analysis.setup<-1
+
+# select correct stage1 analysis
+if(analysis.setup==1){stage1.fit2.final<-pilot.analysis.1
+  stage1.contrast.options<-pilot_contrast.options_analysis.1
+  contrast.options<-EXT_contrast.options_analysis.1
+  fit2.final<-EXT.analysis.1
+}else if (analysis.setup==2){stage1.fit2.final<-pilot.analysis.2
+  stage1.contrast.options<-pilot_contrast.options_analysis.2
+  contrast.options<-EXT_contrast.options_analysis.2
+  fit2.final<-EXT.analysis.2
+} else if (analysis.setup==3){stage1.fit2.final<-pilot.analysis.3
+  stage1.contrast.options<-pilot_contrast.options_analysis.3
+  contrast.options<-EXT_contrast.options_analysis.3
+  fit2.final<-EXT.analysis.3
+} 
+
+of.interest<-"CT.had.covid.ChAdOx1_vs_D0_any" 
+
+
+j<-contrast.options[contrast.options$contrast_name==of.interest,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest,]$i
+
+colnames(fit2.final[[j]]$contrasts)[i]
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+result$rownames<-rownames(result)
+
+title<-colnames(fit2.final[[j]]$contrasts)[i]
+title
+
+# look up result in stage1
+stage1.of.interest<-"CT.had.covid.ChAdOx1_vs_D0_any" 
+
+#CT.had.COVID.MEN_vs_D0_any
+#D7_had_COVID_vs_CT_COVID
+
+j<-stage1.contrast.options[stage1.contrast.options$contrast_name==stage1.of.interest,]$j
+i<-stage1.contrast.options[stage1.contrast.options$contrast_name==stage1.of.interest,]$i
+colnames(stage1.fit2.final[[j]]$contrasts)[i]
+
+stage1.result<-topTable(stage1.fit2.final[[j]], coef=colnames(stage1.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(stage1.fit2.final[[1]]), confint = T)
+stage1.result<-cbind(rownames(stage1.result),stage1.result)
+
+
+
+source(paste0(working.directory,"/rename ENSG with gene symbol in any collapse option.R"))
+
+      
+      con.no<-contrast.options$contrast_number[contrast.options$contrast_name==title]
+      con.no<-con.no[!is.na(con.no)]
+      
+      FDR.cutoff<- 0.05
+
+      sig.nif <- which(result$P.Value<=0.05) # 
+      sig.nif<-result[sig.nif,c("logFC","P.Value")]
+      
+      
+# which extension results were validated by the stage1?
+
+table(rownames(result[result$adj.P.Val<0.05,])%in%rownames(stage1.result)) # for CT vs D0, 25% of FDR genes did not exist in the stage1
+
+FDR.signif.extension<-rownames(result[result$adj.P.Val<0.05,])
+FDR.signif.extension<-FDR.signif.extension[FDR.signif.extension%in%rownames(stage1.result)] # these are the FDR genes that existed in the stage1
+table(FDR.signif.extension%in%rownames(stage1.result[stage1.result$P.Value<0.05,])) #most have not validated.
+
+FDR.signif.extension[!FDR.signif.extension%in%rownames(stage1.result[stage1.result$P.Value<0.05,])][2] #most have not validated.
+
+
+fdr.sig.nif <- result$adj.P.Val<=FDR.cutoff&result$logFC<0 # or whatever you want to use
+fdr.sig.nif<-result[fdr.sig.nif,c("logFC","P.Value","shortname")]
+
+fdr.sig.nif<-merge(fdr.sig.nif,stage1.result,by.x = "row.names", by.y="row.names", all.x = T) # append the stage1 results  to the fdr signif extension results
+colnames(fdr.sig.nif)%<>%gsub("logFC.x","logFC",.)
+colnames(fdr.sig.nif)%<>%gsub("P.Value.x","P.Value",.)
+
+validated_fdr.sig.nif<-fdr.sig.nif[(fdr.sig.nif$logFC*fdr.sig.nif$logFC.y)>0&fdr.sig.nif$P.Value.y<0.05,] # if product of the two foldchanges is positive the sign of thier log FC must have been the same
+validated_fdr.sig.nif<-validated_fdr.sig.nif[!is.na(validated_fdr.sig.nif$Row.names),] # removes NA rows
+validated_fdr.sig.nif$shortname
+
+# same again but for genes which are upregulated
+
+fdr.sig.nif2 <- result$adj.P.Val<=FDR.cutoff&result$logFC>0 # or whatever you want to use
+fdr.sig.nif2<-result[fdr.sig.nif2,c("logFC","P.Value","shortname")]
+
+fdr.sig.nif2<-merge(fdr.sig.nif2,stage1.result,by.x = "row.names", by.y="row.names", all.x = T)
+colnames(fdr.sig.nif2)%<>%gsub("logFC.x","logFC",.)
+colnames(fdr.sig.nif2)%<>%gsub("P.Value.x","P.Value",.)
+validated_fdr.sig.nif2<-fdr.sig.nif2[(fdr.sig.nif2$logFC*fdr.sig.nif2$logFC.y)>0&fdr.sig.nif2$P.Value.y<0.05,] # if product of the two foldchanges is positive the sign of thier log FC must have been the same
+validated_fdr.sig.nif2<-validated_fdr.sig.nif2[!is.na(validated_fdr.sig.nif2$Row.names),] # removes NA rows
+validated_fdr.sig.nif2$shortname
+
+validated_fdr.sig.nif$shortname %<>%  gsub("_repeat*.*","",.)
+
+validated_fdr.sig.nif2$shortname %<>%  gsub("LZTS1_antisense_RNA_1_|_repeat*.*","",.)
+    
+
+
+      ############################################# #
+      #  Volcano plot                          ######
+      ############################################# #
+
+      text<-rbind(validated_fdr.sig.nif,validated_fdr.sig.nif2)
+      text$colour<-c(rep("down",length(validated_fdr.sig.nif$shortname)),                   rep("up",length(validated_fdr.sig.nif2$shortname)))
+      
+      cols <- c("down" = "blue","up" = "red")
+      
+      
+        
+      g<-ggplot(data=result, aes(x=logFC, y=-log10(P.Value) ))+
+        geom_point(alpha=1, size=2, colour="grey",shape=19) +
+        theme(legend.position = "bottom") +
+        xlab("log2 fold change") + ylab("-log10 p-value") +
+        #geom_point(data=sig.nif,col="orange",alpha=0.4, size=4)+
+        geom_point(data=fdr.sig.nif2,col="white",alpha=1, size=2)+ # covers up the underlying grey point so you can put alpha on the colour
+        geom_point(data=fdr.sig.nif,col="white",alpha=1, size=2)+ # covers up the under;ying grey point so you can put alpha on the colour
+        geom_point(data=fdr.sig.nif2,col="light salmon1",alpha=0.5, size=2)+
+        geom_point(data=fdr.sig.nif,col="light blue",alpha=0.5, size=2)+
+        geom_point(data=validated_fdr.sig.nif2,col="red",alpha=1, size=2)+
+        geom_point(data=validated_fdr.sig.nif,col="blue",alpha=1, size=2)+
+        theme_classic(base_size = 20)+
+        geom_vline(aes(xintercept=0),col="black",lty=3)+
+        xlim(c(-max(abs(result$logFC)),max(abs(result$logFC))))+
+                scale_y_continuous(breaks=seq(0, 10, 2.5))+
+        ylim(c(0,8))+
+    #    ggtitle(paste(con.no,title))+
+        theme( text = element_text(size = 18),
+                  panel.border = element_rect(colour = "black", fill=NA, size=0.2))  
+   
+     g<-g +geom_text_repel(data = text,
+                            aes(label = shortname,colour=colour), max.overlaps=7,
+                            size = 3,
+                            box.padding = unit(0.2, "lines"),
+                            point.padding = unit(0.2, "lines"))+
+       scale_color_manual(values=cols)+
+       theme(legend.position = "none")
+      print(g)
+
+```
+
+
+
+```{r create dot.plots,  eval=TRUE}
+
+
+j=3
+i=10
+colnames(fit2.final[[j]]$contrasts)[i]
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+
+result<-cbind(result,rownames(result))
+
+#of.interest<-rownames(result[result$adj.P.Val<0.05,])
+of.interest<-rownames(result[result$adj.P.Val<0.05,])
+
+colour<-paste(ID.link_corrected$vaccine, ID.link_corrected$covid_diagnosis) %>% gsub("ChAdOx1 not_covid|MenACWY not_covid","not covid",.)%>%gsub("had_covid","",.)
+
+colour<-paste(ID.link_corrected$timepoint,ID.link_corrected$vaccine, ID.link_corrected$covid_diagnosis) %>% gsub("ChAdOx1 not_covid|MenACWY not_covid","not covid",.)%>%gsub("had_covid","",.)
+
+vaccine<-ID.link_corrected$vaccine
+vaccine[ID.link_corrected$timepoint=="D0"]<-"NA"
+
+rm(list=ls(pattern="dot.plot"))
+
+for (i in 1:length(of.interest) ){
+p<-ggplot()+
+  geom_boxplot(mapping= aes_q(y=lcpm[rownames(lcpm)==of.interest[i],],
+                    x=timepoint,
+                    colour=vaccine))+
+ geom_point(mapping= aes_q(y=lcpm[rownames(lcpm)==of.interest[i],],
+                                          x=timepoint,
+                   colour=vaccine,
+                   shape=vaccine), 
+            position=position_jitterdodge(jitter.width = 0.1))+
+  ggtitle(of.interest[i])+
+  geom_point()+
+  ylab(expression (lcpm))+
+  xlab("group")+
+  scale_colour_manual(name = "Vaccine group",
+                        values =c("dark red","cornflower blue","dark green"))+
+  scale_x_discrete(limits=c("D0","CT","D7"))+
+  theme_classic()+
+  theme(legend.position = "none",
+       plot.title= element_text(size=10))
+  
+#print(p)
+assign(paste0("dot.plot",i),p)
+
+ scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))
+}
+
+
+if(length(ls(pattern="dot.plot"))<16){
+  
+plot_grid(plotlist=mget(ls(pattern="dot.plot")),
+          align = "v",
+          label_size = 12)
+}else{
+  plot_grid(plotlist=mget(paste0("dot.plot",1:16)),
+          align = "v",
+          label_size = 12)
+}
+        
+
+
+```
+
+
+```{r cross plots and box plots,eval=FALSE}
+# just look at DE genes....
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+
+analysis.setup<-1
+
+# select correct stage1 analysis
+if(analysis.setup==1){stage1.fit2.final<-pilot.analysis.1
+stage1.contrast.options<-pilot_contrast.options_analysis.1
+contrast.options<-EXT_contrast.options_analysis.1
+fit2.final<-EXT.analysis.1
+}else if (analysis.setup==2){stage1.fit2.final<-pilot.analysis.2
+stage1.contrast.options<-pilot_contrast.options_analysis.2
+contrast.options<-EXT_contrast.options_analysis.2
+fit2.final<-EXT.analysis.2
+} else if (analysis.setup==3){stage1.fit2.final<-pilot.analysis.3
+stage1.contrast.options<-pilot_contrast.options_analysis.3
+contrast.options<-EXT_contrast.options_analysis.3
+fit2.final<-EXT.analysis.3
+} 
+
+
+contrast_A_number=11
+contrast_B_number=12
+only_use_DEG<-"Y" # "Y" or "N"
+
+# D0 vs Ct vaccines: 11,12
+# D0 vs D7 vaccines: 20, 21
+# diff diff - analsysis type 3: 3,11
+
+A_j<-contrast.options[contrast.options$contrast_number==contrast_A_number,3]
+A_i<-contrast.options[contrast.options$contrast_number==contrast_A_number,4]
+A<-contrast.options[contrast.options$contrast_number==contrast_A_number,2]
+
+B_j<-contrast.options[contrast.options$contrast_number==contrast_B_number,3]
+B_i<-contrast.options[contrast.options$contrast_number==contrast_B_number,4]
+B<-contrast.options[contrast.options$contrast_number==contrast_B_number,2]
+
+contrast_A_name<-colnames(fit2.final[[A_j]]$contrasts)[A_i]
+contrast_B_name<-colnames(fit2.final[[B_j]]$contrasts)[B_i]
+
+contrast_A_name %<>% gsub("___does.vaccination.ameliorate.acute.covid","",.)
+contrast_B_name %<>% gsub("___does.vaccination.ameliorate.acute.covid","",.)
+
+cat(contrast_A_name)
+cat(contrast_B_name)
+
+contrast_A<-topTable(fit2.final[[A_j]], coef=contrast_A_name, sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+
+contrast_A<-contrast_A[order(rownames(contrast_A)),]
+
+contrast_B<-topTable(fit2.final[[B_j]], coef=contrast_B_name, sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+
+contrast_B<-contrast_B[order(rownames(contrast_B)),]
+
+sum(contrast_B$adj.P.Val<0.05)
+sum(contrast_A$adj.P.Val<0.05)
+
+if(only_use_DEG=="Y"){
+of.interest<-contrast_A$adj.P.Val<0.05|contrast_B$adj.P.Val<0.05
+}else{of.interest<-T}
+
+contrast_A<-contrast_A[of.interest,]
+contrast_B<-contrast_B[of.interest,]
+
+colour # FDR signif CT, D7, both
+
+colour<-data.frame(contrast_A$adj.P.Val,contrast_B$adj.P.Val)
+colour$colour<-NA
+colour$colour[contrast_A$adj.P.Val<0.05&contrast_B$adj.P.Val<0.05]<-"FDR<0.05 both comparisons"
+colour$colour[contrast_A$adj.P.Val<0.05&contrast_B$adj.P.Val>=0.05]<-paste(A,"FDR<0.05")
+colour$colour[contrast_A$adj.P.Val>=0.05&contrast_B$adj.P.Val<0.05]<-paste(B,"FDR<0.05")
+colour$colour[contrast_A$adj.P.Val>=0.05&contrast_B$adj.P.Val>=0.05]<-"FDR<0.05 neither comparisons"
+
+
+# plot in this order so that grey lies beneath everything else
+ggplot(mapping = aes( x=contrast_A$logFC[!colour$colour=="FDR<0.05 neither comparisons"],
+                      y=contrast_B$logFC[!colour$colour=="FDR<0.05 neither comparisons"],
+                      colour=colour$colour[!colour$colour=="FDR<0.05 neither comparisons"]))+
+  geom_point(mapping = aes( x=contrast_A$logFC[colour$colour=="FDR<0.05 neither comparisons"],
+                            y=contrast_B$logFC[colour$colour=="FDR<0.05 neither comparisons"],
+                            colour=colour$colour[colour$colour=="FDR<0.05 neither comparisons"]))+
+  geom_point(alpha=0.9)+
+  # geom_smooth(method=lm, colour="forest green", se=F, fullrange=T)+
+  geom_abline(slope=1, intercept = 0, lty=2,, colour="dark grey")+
+  ylim(c(
+    -1*(max(abs(c(contrast_A$logFC,contrast_B$logFC)))),
+    max(abs(c(contrast_A$logFC,contrast_B$logFC)))
+  )
+  )+
+  xlim(c(
+    -1*(max(abs(c(contrast_A$logFC,contrast_B$logFC)))),
+    max(abs(c(contrast_A$logFC,contrast_B$logFC)))
+  )
+  )+
+  theme_light()+
+  labs(colour="FDR<0.05")+
+  xlab(paste("log FC for",A))+
+  ylab(paste("log FC",B))+
+  geom_vline(xintercept = 0, colour="dark grey")+
+  geom_hline(yintercept = 0, colour="dark grey")+
+  scale_color_manual(
+    # breaks = c("FDR<0.05 neither comparisons","D0vsCT ChAdOx FDR<0.05", "D0vsCT Placebo FDR<0.05", "FDR<0.05 both comparisons",),
+    values=c( "red", "blue", "green","grey"))
+
+
+
+
+contrast_A$sub.analysis<-contrast_A_name
+contrast_B$sub.analysis<-contrast_B_name
+
+col<-c(contrast_A_name="blue",
+       contrast_B_name="red")
+
+names(col)<-c(contrast_A_name,contrast_B_name)
+
+
+logFC.df<-rbind(contrast_A,contrast_B)
+
+logFC.df$sub.analysis <- factor(logFC.df$sub.analysis,levels=c(contrast_A_name,contrast_B_name))
+
+
+logFC.boxplot<-ggplot(logFC.df,aes(y=abs(logFC),
+                                   x=sub.analysis,
+                                   colour=sub.analysis))+
+  geom_violin(fill="grey",alpha=0.5,
+              colour=NA)+
+  geom_jitter(alpha=0.1)+
+  geom_boxplot(alpha=0)+
+  scale_color_manual(values=col)+
+  ylab("absolute Log2 Foldchanges")+
+  xlab("sub analysis")+
+  stat_compare_means(method = "wilcox.test",paired = TRUE)+
+  theme_pubr()+
+  theme(legend.position = "none")
+
+
+# distribution plots
+table(rownames(contrast_A)==rownames(contrast_B)) # a check
+
+ks<-ks.test(contrast_A$logFC,contrast_B$logFC)
+
+logFC.df.hist<-ggplot(logFC.df, aes(x=logFC, fill=sub.analysis))+
+  geom_density(alpha=0.4)+
+  scale_fill_manual(
+    values=col)+
+  labs(subtitle = paste("Kolmogorov-Smirnov test p =",round(ks$p.value,6)))+
+  theme_pubclean()
+
+
+# effect size
+
+effect.size.A<-data.frame(fit2.final[[A_j]]$coefficients[,A_i]/sqrt(fit2.final[[A_j]]$s2.post),contrast_A_name)
+effect.size.B<-data.frame(fit2.final[[B_j]]$coefficients[,B_i]/sqrt(fit2.final[[B_j]]$s2.post),contrast_B_name)
+
+
+rownames(effect.size.A)<-names(fit2.final[[A_j]]$coefficients[,A_i])
+rownames(effect.size.B)<-names(fit2.final[[B_j]]$coefficients[,B_i])
+effect.size.A <- effect.size.A[order(rownames(effect.size.A)),]
+effect.size.B <- effect.size.B[order(rownames(effect.size.B)),]
+
+effect.size.A<-effect.size.A[of.interest,]
+effect.size.B<-effect.size.B[of.interest,]
+
+colnames(effect.size.A)<-c("effect.size","sub.analysis")
+colnames(effect.size.B)<-colnames(effect.size.A)
+
+effect.size.df<-rbind(effect.size.A,effect.size.B)
+colnames(effect.size.df)<-c("effect.size","sub.analysis")
+
+
+effect.size.df$sub.analysis <- factor(effect.size.df$sub.analysis,,levels=c(contrast_A_name,contrast_B_name))
+
+table(rownames(effect.size.A)==rownames(effect.size.B)) # a check
+
+ks<-ks.test(effect.size.A$effect.size,effect.size.B$effect.size)
+
+
+effect.size.boxplot<-ggplot(effect.size.df,aes(y=abs(effect.size),
+                                               x=sub.analysis,
+                                               colour=sub.analysis))+
+  geom_violin(fill="grey",alpha=0.5,
+              colour=NA)+
+  geom_jitter(alpha=0.1)+
+  geom_boxplot(alpha=0)+
+  scale_color_manual(values=col)+
+  ylab("absolute effect sizes")+
+  xlab("sub analysis")+
+  stat_compare_means(method = "wilcox.test",paired = TRUE)+
+  theme_pubclean()+
+  theme(legend.position = "none")
+
+
+effect.size.df.hist<-ggplot(effect.size.df, aes(x=effect.size, fill=sub.analysis))+
+  geom_density(alpha=0.5)+
+  labs(subtitle = paste("Kolmogorov-Smirnov test p =",round(ks$p.value,7)))+
+  scale_fill_manual(
+    values=col)+
+  theme_pubr()
+
+wilcox.test(abs(effect.size.A$effect.size),abs(effect.size.B$effect.size),paired=T)
+
+table(timepoint.diagnosis.vaccine)
+
+plot_grid(logFC.df.hist,logFC.boxplot)
+plot_grid(effect.size.df.hist,effect.size.boxplot)
+
+
+## effect sizes can go in the supplement
+
+```
+
+
+```{r gene kinetics}
+of.interest.A<-"D7vsCT" 
+#
+#D7.had.COVID.MEN_vs_D0_any
+
+j<-contrast.options[contrast.options$contrast_name==of.interest.A,]$j
+i<-contrast.options[contrast.options$contrast_name==of.interest.A,]$i
+
+colnames(fit2.final[[j]]$contrasts)[i]
+
+A<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T)
+
+#DO.vs.CT<-A
+#CT.vs.D7<-A
+#D0.vs.D7<-A
+
+#what is up at D7 and not CT (no DE at CT_D0, DE at D0&0_D7) then do an ORA on those genes: only 9 genes and only 2 of them are miRs
+
+timecourse<-merge(DO.vs.CT,CT.vs.D7,by.y="row.names",by.x="row.names")
+# only keep genes with FDR<-0.05 in both comparisons
+timecourse<-merge(timecourse,D0.vs.D7,by.x="Row.names",by.y="row.names")
+
+timecourse<-timecourse[timecourse$adj.P.Val.x>0.05&timecourse$adj.P.Val.y<0.05&timecourse$adj.P.Val<0.05,]
+
+
+timecourse$miR<-grepl("hsa-miR|hsa-let",timecourse$Row.names)
+timecourse$no.change<-0
+timecourse<-pivot_longer(timecourse,
+             cols=c("logFC.x","logFC.y","no.change"),
+             names_to="timepoint",
+             values_to = "logFC")
+
+timecourse$timepoint %<>%
+  gsub("logFC.x","CT",.) %>%
+  gsub("logFC.y","D7",.) %>%
+  gsub("no.change","D0",.)
+
+ggplot(data=timecourse[timecourse$miR==T,], aes(
+         y=logFC,
+         x=timepoint,
+         group=Row.names,
+         colour=miR))+
+  geom_line()+
+  scale_x_discrete(limits=c("D0","CT","D7"))+
+  theme_pubr()
+  
+ggplot(data=timecourse[timecourse$miR==F,], aes(
+         y=logFC,
+         x=timepoint,
+         group=Row.names,
+         colour=miR))+
+  geom_line()+
+  scale_x_discrete(limits=c("D0","CT","D7"))+
+  theme_pubr()
+  
+
+# id diff at D0 vs D7 and Ct vs D7 # do ORA on these miRs
+# what proportion of CT genes are DE c.f. D0 and D7 # need CT.D7 for
+
+timecourse<-merge(DO.vs.CT,CT.vs.D7,by.y="row.names",by.x="row.names")
+# only keep genes with FDR<-0.05 in both comparisons
+timecourse<-merge(timecourse,D0.vs.D7,by.x="Row.names",by.y="row.names")
+
+sum(timecourse$adj.P.Val.x<0.05)
+# 430 genes DE at CT
+
+sum(timecourse$adj.P.Val.y<0.05)
+# 175 gebes DE at D7 so....
+# 40% of CT genes are probably back to normal by D7
+
+
+sum(grepl("hsa-miR|hsa-let",timecourse$Row.names[timecourse$adj.P.Val.x<0.05]))
+#294 genes are non miRs ut of the 430 genes which are DE at CT
+# 136 are  miRs
+
+sum(!grepl("hsa-miR|hsa-let",timecourse$Row.names[timecourse$adj.P.Val.y<0.05]))
+
+#99  DE at CT vs D7 are miRs, 76 are non-miRs
+
+sum(!grepl("hsa-miR|hsa-let",timecourse$Row.names[timecourse$adj.P.Val.x<0.05]))
+# 52 miRs DE at CT and then ? down by D7
+# 36 non miRs DE at DT and then down by D7
+
+
+```
+
+
+```{r}
+
+# load in a sample DGE list
+
+# split the results based on RNA type
+
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+
+analysis.setup.selection<-1
+
+  stage2.fit2.final<-EXT.analysis.1
+  stage2.contrast.options<-EXT_contrast.options_analysis.1
+
+j<-3
+i<-12
+
+result<-topTable(stage2.fit2.final[[j]], coef=colnames(stage2.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(stage2.fit2.final[[1]]), confint = T)
+# keep only FDR<0.05
+result$rownames<-rownames(result)
+
+cat(colnames(stage2.fit2.final[[j]]$contrasts)[i])
+
+result$miR<-grepl("^hsa-miR-|&hsa-miR-|^hsa-let-|&hsa-let-",result$rownames)
+result$miR.hp<-grepl("^MiR.hp|&MiR.hp__",result$rownames)
+result$lncRNA<-grepl("^lncRNA__|&lncRNA__",result$rownames)
+result$protein.coding<-grepl("^ENSG|&ENSG",result$rownames)
+result$Reverse.complement<-grepl("ReverseComplement_",result$rownames)
+result$rRNA<-grepl("^rRNA__|&rRNA__",result$rownames)
+result$snoRNA<-grepl("^snoRNA__|&snoRNA__",result$rownames)
+result$snRNA<-grepl("^snRNA__|&snRNA__",result$rownames)
+result$yRNA<-grepl("^yRNA__|&yRNA__",result$rownames)
+result$vault<-grepl("^vault__",result$rownames)
+
+result.for.plot<-result[,c(1,10:ncol(result))]
+  
+  
+# lengthen the table
+
+
+ data_long <- result.for.plot %>%
+  pivot_longer(!logFC, names_to = "RNA_class", values_to = "present")
+
+ data_long<-data_long[!data_long$present==F,]
+ 
+ 
+# CT_D0_Men<-data_long #3,2
+# CT_D0_Chad<-data_long # 3,3
+# D7_D0_Men<-data_long # 3,11
+# D7_D0_Chad<-data_long # 3,12
+ 
+ D0<-data_long
+ D0<-data_long[match(unique(data_long$RNA_class),data_long$RNA_class),]
+ D0.Men<-data_long[match(unique(data_long$RNA_class),data_long$RNA_class),]
+ D0.Men$logFC<-0
+ D0.Chad<-data_long[match(unique(data_long$RNA_class),data_long$RNA_class),]
+ D0.Chad$logFC<-0
+   
+ 
+ D0.Chad$comparison<-"D0_Chad"
+ D0.Men$comparison<-"D0_Men"
+ 
+ CT_D0_Men$comparison<-"CT_D0_Men"
+ CT_D0_Chad$comparison<-"CT_D0_Chad"
+ D7_D0_Men$comparison<-"D7_D0_Men"
+ D7_D0_Chad$comparison<-"D7_D0_Chad"
+
+
+ result.to.plot<-rbind(D0.Men,D0.Chad,CT_D0_Men,CT_D0_Chad,D7_D0_Men,D7_D0_Chad)
+ result.to.plot$group<-NA
+ result.to.plot$group[grepl("Men",result.to.plot$comparison)]<-"Control vaccine"
+ result.to.plot$group[grepl("Chad",result.to.plot$comparison)]<-"nCoV-19"
+
+ result.to.plot$timepoint<-NA
+ result.to.plot$timepoint[grepl("CT",result.to.plot$comparison)]<-"CT"
+ result.to.plot$timepoint[grepl("D7",result.to.plot$comparison)]<-"CT+7"
+ result.to.plot$timepoint[grepl("^D0",result.to.plot$comparison)]<-"D0"
+
+
+
+ ggplot(result.to.plot,
+        aes(y=logFC,
+            x=timepoint,
+            colour=group))+
+   geom_boxplot()+ 
+   scale_x_discrete(limits=c("D0","CT","CT+7"))+
+   facet_wrap(~RNA_class)
+
+ ### go and look at original script for the CI
+ 
+ 
+ 
+
+```
+
+
+# ribbon plots for average log2 FC changes in sRNA expression over time
+
+```{r}
+
+time.graph<-data.frame(matrix(nrow=100,ncol=5))
+
+
+colnames(time.graph)<-c("class","analysis","mean","CI.lower","CI.upper")
+
+type<-unique(result.to.plot$RNA_class)
+
+for( i in 1:length(type))
+{
+
+look.up<-type[i]
+rv3<-result.to.plot[grepl(look.up,result.to.plot$RNA_class),]
+
+Analysis<-unique(result.to.plot$comparison)
+
+t.test<-t.test(rv3$logFC[rv3$comparison==Analysis[3]])
+time.graph$mean[(6*(i-1))+1]<-t.test$estimate # pop mean in the correct place in the table
+time.graph[(6*(i-1))+1,4:5]<-t.test$conf.int[1:2]
+
+t.test<-t.test(rv3$logFC[rv3$comparison==Analysis[4]])
+time.graph$mean[(6*(i-1))+2]<-t.test$estimate
+time.graph[(6*(i-1))+2,4:5]<-t.test$conf.int[1:2]
+
+
+t.test<-t.test(rv3$logFC[rv3$comparison==Analysis[5]])
+time.graph$mean[(6*(i-1))+3]<-t.test$estimate # pop mean in the correct place in the table
+time.graph[(6*(i-1))+3,4:5]<-t.test$conf.int[1:2]
+
+t.test<-t.test(rv3$logFC[rv3$comparison==Analysis[6]])
+time.graph$mean[(6*(i-1))+4]<-t.test$estimate
+time.graph[(6*(i-1))+4,4:5]<-t.test$conf.int[1:2]
+
+
+
+time.graph$mean[(6*(i-1))+5]<-0# pop mean in the correct place in the table
+time.graph[(6*(i-1))+5,4:5]<-0
+
+
+time.graph$mean[(6*(i-1))+6]<-0
+time.graph[(6*(i-1))+6,4:5]<-0
+
+time.graph$class[(6*(i-1)+1):(6*(i-1)+6)]<-look.up
+
+time.graph$analysis[(6*(i-1)+1):(6*(i-1)+6)]<-Analysis[c(3:6,1:2)]
+
+print(i)
+}
+
+
+time.graph<-time.graph[!is.na(time.graph$class),]
+
+ time.graph$group<-NA
+ time.graph$group[grepl("Men",time.graph$analysis)]<-"Control vaccine"
+ time.graph$group[grepl("Chad",time.graph$analysis)]<-"nCoV-19"
+
+ time.graph$timepoint<-NA
+ time.graph$timepoint[grepl("CT",time.graph$analysis)]<-"CT"
+ time.graph$timepoint[grepl("D7",time.graph$analysis)]<-"CT+7"
+ time.graph$timepoint[grepl("^D0",time.graph$analysis)]<-"D0"
+
+time.graph$class[grepl("protein.coding",time.graph$class)]<-"protein coding"
+time.graph$class[grepl("Reverse.complement",time.graph$class)]<-"Antisense to known feature"
+time.graph$class[grepl("miR\\.hp",time.graph$class)]<-"offset miRNA"
+time.graph$class[grepl("^miR$",time.graph$class)]<-"mature miR"
+
+
+unique(time.graph$class)
+time.graph$class %<>% factor(.,levels=c("mature miR",
+                                                       "offset miRNA",
+                                                       "snoRNA",
+                                                       "protein coding",
+                                                       "lncRNA",
+                                                       "snRNA",
+                                                       "yRNA",
+                                                       "vault",
+                                                        "rRNA",
+                                                       "Antisense to known feature"))
+
+time.graph$group[grepl("Control vaccine", time.graph$group)]<-"placebo"
+
+
+ggplot(time.graph,
+       aes(
+  y=mean,
+  x=timepoint,
+  colour=group,
+  group=group
+))+
+  xlab("Timepoint")+
+  geom_hline(yintercept = 0, lty=2)+
+  geom_ribbon(mapping=aes(
+    ymin=CI.lower,
+    ymax=CI.upper,
+   x=timepoint,
+  fill=group,
+  group=group,
+  colour=group,
+  lwd=NA
+  ), 
+    alpha=0.5,)+ 
+  geom_line()+
+  xlab("timepoint")+
+  ylab("log2 foldchange relative to baseline")+
+  theme_minimal()+
+    scale_x_discrete(limits=c("D0","CT","CT+7"),
+                   labels=c("D0"="Baseline",
+                            "CT"="CT\nNAAT+ve",
+                            "CT+7"="CT+7\nNAAT+ve"))+
+     scale_colour_manual(   values=c("nCoV-19"="red",
+                                     "placebo"="blue"))+
+       scale_fill_manual(   values=c("nCoV-19"="red",
+                                     "placebo"="blue"))+
+  facet_wrap(~class)
+
+
+```
+
+
+```{r write all results to file}
+
+# want to go through each contrast, print the results to file. For stage1 and ext
+
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+
+for(x in 1:3){
+  
+analysis.setup.selection<-x
+
+stage2.fit2.final<-get(paste0("EXT.analysis.",x))
+stage2.contrast.options<-get(paste0("EXT_contrast.options_analysis.",x))
+
+
+for(k in 1:nrow(stage2.contrast.options)){
+  
+j=stage2.contrast.options$j[k]
+i=stage2.contrast.options$i[k]
+
+
+result<-topTable(stage2.fit2.final[[j]], coef=colnames(stage2.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(stage2.fit2.final[[1]]), confint = T)
+# keep only FDR<0.05
+result$rownames<-rownames(result)
+
+source(paste0(working.directory,"/rename ENSG with gene symbol in any collapse option.R"))
+
+
+colnames(stage2.fit2.final[[j]]$contrasts)[i]
+
+
+result<-cbind(rownames(result),result$shortname,result[,1:8])
+
+
+
+colnames(result)[1:2]<-c("feature_name","shortened_feature_name")
+
+dir.create(paste0(working.directory,"/stage2_analysis.setup.selection_",analysis.setup.selection))
+
+file.name<-paste0("stage2_analysis.setup.selection_",analysis.setup.selection,"/",colnames(stage2.fit2.final[[j]]$contrasts)[i],".txt")
+
+
+file.name<-paste0(working.directory,"/",file.name)
+
+file.name %<>% gsub("any","all_subgroups",.)
+
+
+fwrite(result,file=file.name)
+
+print(paste(i,j))
+  }
+cat(paste("analysis setup=",x,"all written to file"))
+}
+
+```
+
+
+
+```{r Model effect of time since vaccination on gene expression @ Ct and CT+7 for the ChAdOx1 nCoV-19 groups }
+
+
+#Model effect of time since vaccination on gene expression @ Ct and CT+7 for the ChAdOx1 nCoV-19 groups
+
+# for people who got COVID and had chadox - @ CT what was the effect on time since vaccination on gene expression?
+# manual FDR for signif DE genes only (baseline vs CT)
+
+#### Do differential expression analysis using limma voom ######
+
+days.since.V1<-ID.link_corrected$no.days.between.S0.and.vacc1...30 # this is actually days since symptom onset
+
+days.since.V1 %<>% as.numeric(days.since.V1)
+# source the contrast matrix
+  
+
+of.interest<-ID.link_corrected$timepoint=="D7"&ID.link_corrected$covid_diagnosis_vaccine=="had_covid ChAdOx1"
+  
+days.since.V1<-ID.link_corrected$no.days.between.Symptom.and.vacc1[of.interest]
+days.since.V1 %<>% as.numeric(days.since.V1)
+# source the contrast matrix
+
+
+days.since.V2<-ID.link_corrected$no.days.between.S0.and.vacc2[of.interest]
+days.since.V2 %<>% as.numeric(.)
+# source the contrast matrix
+
+
+design<- model.matrix(~Red.cell.count[of.interest]+days.since.V2)
+y<-DGEList(total.counts4[,of.interest])
+v <- voom(y, design,plot=FALSE,normalize.method = "none")
+
+colnames(design)
+
+fit <- lmFit(v, design)
+cont <- contrasts.fit(fit, coef="days.since.V2")
+res <- eBayes(cont)
+top.table <- topTable(res, sort.by="P", n=Inf)
+
+
+#top.table.ext.V1<-top.table # vaccine 1
+top.table.ext.V2<-top.table # vaccine 2
+
+#manual FDR
+timewise.table<-top.table.ext.V2
+ 
+table(rownames(result)%in%rownames(timewise.table)) # grab a result from script further above
+
+rownames(result)[!rownames(result)%in%rownames(timewise.table)]
+
+timewise.table.FDR<-timewise.table[rownames(timewise.table)%in%rownames(result[result$adj.P.Val<0.05,]),]
+
+timewise.table.FDR$manual.FDR<-p.adjust(timewise.table.FDR$P.Value,method="fdr")
+timewise.table.FDR[timewise.table.FDR$manual.FDR<0.05,] # any thing signif manually?
+
+
+# nothing for CT chad vs D0 or CT vs D0 after vacc 1 or vacc 2
+# nothing for D7 vs baseline either
+
+
+```
+

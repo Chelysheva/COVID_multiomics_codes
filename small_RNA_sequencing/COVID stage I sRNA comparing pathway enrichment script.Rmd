@@ -1,0 +1,406 @@
+---
+  title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+
+working.directory<-"C:/Users/ruthd/Dropbox/COVID/Nature/files for analysis" # enter working directory where files have been downloaded to
+  
+ 
+
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+
+
+p_load("readxl",
+       "readr", 
+      "plotly",
+       "data.table",
+       "reshape",
+       "tidyr",
+       "stringr",
+       "ggplot2",
+       "stringi",
+       "textclean",
+       "RColorBrewer",
+       "reshape2",
+       "gplots",
+       "circlize",
+       "gprofiler2",
+       "magrittr",
+       "ggpubr",
+       "rstatix",
+       "plotrix",
+       "ggnewscale",
+       "cowplot",
+       "ggrepel")
+
+
+options(scipen = 999)
+
+rv<-readRDS(paste0(working.directory,"/COVID_stage1_sRNA_MIEAA_all_results.RDS"))
+
+
+rv$`GSEA_D0vsCT Q-value`<-as.numeric(rv$`GSEA_D0vsCT Q-value`)
+rv$`GSEA_D0vsCT P-value`<-as.numeric(rv$`GSEA_D0vsCT P-value`)
+rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`<-as.numeric(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)
+rv$`GSEA_CT.had.COVID.MEN_vs_D0 Q-value`<-as.numeric(rv$`GSEA_CT.had.COVID.MEN_vs_D0 Q-value`)
+rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 P-value`<-as.numeric(rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 P-value`)
+rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 Q-value`<-as.numeric(rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 Q-value`)
+rv$`GSEA_D0vD7 P-value`<-as.numeric(rv$`GSEA_D0vD7 P-value`)
+rv$`GSEA_D0vD7 Q-value`<-as.numeric(rv$`GSEA_D0vD7 Q-value`)
+rv$`D7vsCT P-value`<-as.numeric(rv$`D7vsCT P-value`)
+rv$`D7vsCT Q-value`<-as.numeric(rv$`D7vsCT Q-value`)
+
+rv$`D7.had.COVID.MEN_vs_D0 P-value`<-as.numeric(rv$`D7.had.COVID.MEN_vs_D0 P-value`)
+rv$`D7.had.COVID.MEN_vs_D0 Q-value`<-as.numeric(rv$`D7.had.COVID.MEN_vs_D0 Q-value`)
+
+rv$`D7.had.COVID.CHADOX_vs_D0 P-value`<-as.numeric(rv$`D7.had.COVID.CHADOX_vs_D0 P-value`)
+rv$`D7.had.COVID.CHADOX_vs_D0 Q-value`<-as.numeric(rv$`D7.had.COVID.CHADOX_vs_D0 Q-value`)
+
+
+
+rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN P-value`<-as.numeric(rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN P-value`)
+rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN Q-value`<-as.numeric(rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN Q-value`)
+
+rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX P-value`<-as.numeric(rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX P-value`)
+rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX Q-value`<-as.numeric(rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX Q-value`)
+
+rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx P-value`<-as.numeric(rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx P-value`)
+rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx Q-value`<-as.numeric(rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx Q-value`)
+
+rv<-rv[order(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`),]
+
+rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY P-value`<-as.numeric(rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY P-value`)
+rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY Q-value`<-as.numeric(rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY Q-value`)
+
+options(scipen=999)
+
+pathway<-unique(rv$Category)
+pathway
+
+##### select catogory of interest ######
+
+# [1] "WikiPathways (miRPathDB)"                           
+# [2] "KEGG (miRPathDB)"                                   
+# [3] "GO Biological process (miRPathDB)"   ###               
+# [4] "Annotations derived over miRTarBase (Gene Ontology)" ###
+# [5] "Reactome (miRPathDB)"                               
+# [6] "Annotation (Gene Ontology)" ###
+# [7] "Pathways (miRWalk)"                                 
+# [8] "Pathways (KEGG)"
+
+# don't want molecular functions or Cellular componen in the analysis therefore need to remove terms that map to them. 
+
+cell_or_molecular_functions<-rv$Subcategory[rv$Category=="GO Cellular component (miRPathDB)"|rv$Category=="GO Molecular function (miRPathDB)"] %>%
+  unique(.)
+
+# restrict to biological processess
+GO_biological<-fread(paste0(working.directory,"/GO categories.txt"),header=F)
+
+GO_biological<-GO_biological[GO_biological$V3%in%"biological_process",]
+
+rv$GO_number<-reshape2::colsplit(rv$Subcategory,pattern="GO",names=1:2)[,2]
+
+rv$GO_number<-paste0("GO:",rv$GO_number)
+rv$biological_process<-rv$GO_number%in%GO_biological$V1
+
+
+
+category.to.select<-"Annotations derived over miRTarBase \\(Gene Ontology\\)" # wikipathways contains kegg terms so remove KEGG or wiki
+
+
+# which contrasts have the highest signif.results?
+rv2<-rv[grepl("Annotations derived over miRTarBase \\(Gene Ontology\\)|WikiPathways (miRPathDB)|Reactome \\(miRPathDB\\)",rv$Category),]
+
+rv2<-rv[grepl("GO Biological process",rv$Category),]
+
+
+# which contrasts have the highest signif.results?
+rv2<-data.frame(rv2)
+con<-colnames(rv2)[grepl("Q",colnames(rv))]
+
+
+df<-data.frame(matrix(ncol = 2,nrow=1))
+
+for(i in 1:length(con))
+{
+  no.signif<-sum(rv2[,grepl(con[i],colnames(rv2))]<0.05)
+  df[i,1]<-con[i]
+  df[i,2]<-no.signif
+}
+
+
+ keep<-rv$GSEA_D0vD7.Q.value<0.05&rv$rv$GSEA_D0vsCT.P.value>0.05&rv$D7vsCT.Q.value<0.05 
+ 
+ rv2<-rv[keep,]
+ 
+#category.to.select<-"KEGG|WikiPathways|GO Biological process|Annotations derived over miRTarBase|Reactome \\(miRPathDB\\)|Annotation \\(Gene Ontology\\)|Pathways \\(miRWalk\\)|Pathways \\(KEGG\\)"
+
+of.interest<-grepl(category.to.select,rv$Category)&rv$biological_process
+  
+
+unique(rv$Category[of.interest])
+
+
+table(rv$`GSEA_D0vsCT P-value`<0.01)
+table(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`<0.01)
+
+# get the enirchment signs for the cross plots
+rv$Enrichment.sign<-rv$`GSEA_D0vsCT Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`<-rv$`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 Enrichment.sign`<-rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`GSEA_D0vD7 Enrichment.sign`<-rv$`GSEA_D0vD7 Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`D7vsCT Enrichment.sign`<-rv$`D7vsCT Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`D7.had.COVID.MEN_vs_D0 Enrichment.sign`<-rv$`D7.had.COVID.MEN_vs_D0 Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`D7.had.COVID.CHADOX_vs_D0 Enrichment.sign`<-rv$`D7.had.COVID.CHADOX_vs_D0 Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN Enrichment.sign`<-rv$`CT.had.COVID.MEN_vs_D7_had_covid_MEN Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX Enrichment.sign`<-rv$`CT.had.COVID.CHADOX_vs_D7_had_covid_CHADOX Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx Enrichment.sign`<-rv$`CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY Enrichment.sign`<-rv$`D7.had.COVID.CHADOX_vs_D7.had.COVID.MenACWY Enrichment` %>%
+  gsub("enriched",1,.)%>%
+  gsub("depleted",-1,.)%>%
+  as.numeric(.)
+
+
+cor<-cor.test(y=-log10(rv$`GSEA_D0vsCT P-value`[of.interest])*rv$Enrichment.sign[of.interest],
+              x=-log10(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)[of.interest]*rv$`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`[of.interest])
+
+
+# get FDRs for pathways of interest
+
+# reset FDR corrections to be done manually
+rv$`GSEA_D0vsCT FDR`<-NA
+rv$`GSEA_CT.had.COVID.MEN_vs_D0 FDR`<-NA
+rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 FDR`<-NA
+rv$`GSEA_D0vD7 FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+
+rv$`D7vsCT FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+rv$`D7vsCT FDR`<-NA
+```
+
+
+```{r}
+# get FDR correction for pathways of interest
+rv$`GSEA_D0vsCT FDR`[of.interest]<-p.adjust(rv$`GSEA_D0vsCT P-value`[of.interest],method="fdr")
+rv$`GSEA_CT.had.COVID.MEN_vs_D0 FDR`[of.interest]<-p.adjust(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest],method="fdr")
+# only test for when miR shown to be different between CT and D7
+
+of.interest2<-rv$`GSEA_D0vsCT FDR`<0.01 |rv$`GSEA_CT.had.COVID.MEN_vs_D0 FDR`<0.01 # must be comparison of interest and FDR <0.01. Any thing NA was not included in analysis
+of.interest2[is.na(of.interest2)]<-FALSE
+
+rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 FDR`[of.interest2]<-p.adjust(rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 P-value`[of.interest2],method="fdr")
+rv$`GSEA_D0vD7 FDR`[of.interest2]<-p.adjust(rv$`GSEA_D0vD7 P-value`[of.interest2],method="fdr")
+rv$`D7vsCT FDR`[of.interest2]<-p.adjust(rv$`D7vsCT P-value`[of.interest2],method="fdr")
+
+sum(of.interest)
+
+table(rv$`GSEA_D0vsCT FDR`<0.01) 
+table(rv$`GSEA_CT.had.COVID.MEN_vs_D0 FDR`<0.01)
+table(rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 FDR`<0.01)
+table(rv$`GSEA_D0vD7 FDR`<0.01)
+table(rv$`D7vsCT FDR`<0.01)
+table(rv$`GSEA_D0vD7 Q-value`<0.01) 
+table(rv$`D7vsCT Q-value`<0.01) 
+
+
+colour<-paste(rv$`GSEA_D0vsCT FDR`<0.01,rv$`GSEA_CT.had.COVID.MEN_vs_D0 FDR`<0.01)
+colour<-colour%>%
+  gsub("^TRUE TRUE$","FDR<0.01 MenACWY & ChadOx",.)%>%
+  gsub("^TRUE FALSE$","FDR<0.01 MenACWY",.)%>%
+  gsub("^FALSE TRUE$","FDR<0.01 ChadOx",.)%>%
+  gsub("^FALSE FALSE$","nil FDR<0.01",.)
+
+# wilcox test on raw p-values
+wilcox.test(rv$`GSEA_D0vsCT P-value`[of.interest],
+            rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest],
+            paired=T)
+
+p.boxplot<-ggplot()+
+    #  geom_violin(mapping=aes(
+    # y=log10(rv$`GSEA_D0vsCT P-value`[of.interest]),
+    # x="enrichment 1"))+
+  geom_jitter(mapping=aes(
+    y=((rv$`GSEA_D0vsCT P-value`[of.interest])),
+    x="enrichment 1"),alpha=0.5,colour="light grey")+
+  geom_boxplot(mapping=aes(
+    y=((rv$`GSEA_D0vsCT P-value`[of.interest])),
+    x="enrichment 1"),alpha=0)+
+  geom_jitter(mapping=aes(
+    y=((rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest])),
+    x="enrichment 2"),alpha=0.5,colour="light grey")+
+  geom_boxplot(mapping=aes(
+    y=((rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest])),
+    x="enrichment 2"),alpha=0)+
+    # geom_violin(mapping=aes(
+    # y=log10(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest]),
+    # x="enrichment 2"))+
+  theme_minimal()
+
+
+p.val<-ks.test(rv$`GSEA_D0vsCT P-value`[of.interest],
+   rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest])
+p.val<-p.val$p.value
+
+p.density<-ggplot()+
+  geom_step(stat="ecdf",
+            mapping=aes(
+              x=rv$`GSEA_D0vsCT P-value`[of.interest],
+              colour="enrichment 1"))+
+  geom_step(stat="ecdf",mapping=aes(
+    x=(rv$`GSEA_CT.had.COVID.MEN_vs_D0 P-value`[of.interest]),
+    colour="enrichment 2"))+
+  xlab("p-value")+
+  ylab("proportion of pathways")+
+  ggtitle("distribution of p-values from pathway enrichment analyses\n","kolmogorov smirnov test: p < 0.00000000000000022")+
+  theme_pubclean()  # higher line has better p-values, because at any given p, there were more genes that had a p value lower than p. 
+  
+
+# plot signed enrichment p-values, colour by FDR signif
+p1<- ggplot()+
+  geom_point(
+    data=rv[of.interest,],
+    aes(y=-log10(`GSEA_D0vsCT P-value`)*Enrichment.sign,
+        x=-log10(`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)*`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`,
+        colour=colour[of.interest]))+
+ # ggtitle(category.to.select)+
+  scale_color_manual(name="legend",
+                     values=c("purple", "orange", "brown","grey"))+
+  theme_minimal()+
+    geom_vline(xintercept = 0)+
+    geom_hline(yintercept = 0)+
+    theme(legend.title = element_text( size=8), legend.text=element_text(size=8))
+
+
+
+# plot signed enrichment p-values, colour by FDR signif for comparison enrichment 
+p2<-ggplot()+
+  geom_point(
+    data=rv[of.interest,],
+    aes(y=-log10(`GSEA_D0vsCT P-value`)*Enrichment.sign,
+        x=-log10(`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)*`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`),
+    alpha=0.5,colour="grey")+
+  geom_point( # add colour to points with enrichment 3 fdr<0.01,anything not included in the pathways of interest will be NA and will not be plotted because they don't have enrichment 1 and 2 p-values, anything included in comparison with FDR>0.05 will be false so no included, anything with FDR<-0.05 will be present and have p-values and be coloured green.
+    data=rv[rv$`GSEA_CT.had.covid.ChAdOx1_vs_D0 FDR`<0.01,],
+    aes(y=-log10(`GSEA_D0vsCT P-value`)*Enrichment.sign,
+        x=-log10(`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)*`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`),
+    colour="green")+
+ # ggtitle(category.to.select)+
+  scale_color_discrete(name="legend")+
+  theme_minimal()+  theme(legend.title = element_text( size=8), legend.text=element_text(size=8))+
+    geom_vline(xintercept = 0)+
+    geom_hline(yintercept = 0)
+
+
+
+rv$cross_section_result<-NA
+
+rv$cross_section_result<-paste("CT:CT",rv$`GSEA_D0vD7 Enrichment`,", D7:D7",rv$`D7vsCT Enrichment`)
+
+rv$cross_section_result[is.na(rv$`GSEA_D0vD7 FDR`)|rv$`GSEA_D0vD7 FDR`>0.05]<- rv$cross_section_result[is.na(rv$`GSEA_D0vD7 FDR`)|rv$`GSEA_D0vD7 FDR`>0.05]%>% gsub("CT:CT enriched , |CT:CT depleted , ","",.)
+
+rv$cross_section_result[is.na(rv$`D7vsCT FDR`)|rv$`D7vsCT FDR`>0.05]<- rv$cross_section_result[is.na(rv$`D7vsCT FDR`)|rv$`D7vsCT FDR`>0.05]%>% gsub("D7:D7 enriched|D7:D7 depleted| , ","",.)
+
+
+p3<-ggplot()+
+  geom_point(
+    data=rv[of.interest,],
+    aes(y=-log10(`GSEA_D0vsCT P-value`)*Enrichment.sign,
+        x=-log10(`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)*`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`),
+    alpha=0.5,colour="grey")+
+  geom_point(
+    data=rv[rv$`GSEA_D0vD7 FDR`<0.01|rv$`D7vsCT FDR`<0.01,],
+    aes(y=-log10(`GSEA_D0vsCT P-value`)*Enrichment.sign,
+        x=-log10(`GSEA_CT.had.COVID.MEN_vs_D0 P-value`)*`GSEA_CT.had.COVID.MEN_vs_D0 Enrichment.sign`,
+        colour=`cross_section_result`))+
+ # ggtitle(category.to.select)+
+  scale_color_discrete(name="legend")+
+    geom_vline(xintercept = 0)+
+    geom_hline(yintercept = 0)+
+  theme_minimal()+  theme(legend.title = element_text( size=8), legend.text=element_text(size=8))
+
+
+
+
+
+p.density
+p1
+p2 # can ignore missing values on plots - have designed it this way
+p3 # can ignore missing values on plots - have designed it this way
+
+figure<-ggarrange(p.boxplot, p.density,p1,p2,p3,
+                  labels=LETTERS[1:5])
+
+
+
+
+fig2<-annotate_figure(figure,
+                top = text_grob(category.to.select, color = "black", face = "bold", size = 14))
+
+ggsave("fig2.pdf",width=20,height=10)
+ggsave(plot=fig2,"mtcars.png",device="png")
+
+
+
+duped<-rv$Subcategory[duplicated(rv$Subcategory)]
+
+duped.rv<-rv[of.interest&rv$Subcategory%in%duped,]
+
+duped.rv
+
+category.to.select<-"KEGG|WikiPathways|GO Biological process|Annotations derived over miRTarBase|Reactome \\(miRPathDB\\)|Annotation \\(Gene Ontology\\)|Pathways \\(miRWalk\\)|Pathways \\(KEGG\\)"
+
+of.interest<-grepl(category.to.select,rv$Category)&!rv$Subcategory%in%cell_or_molecular_functions
+  
+
+
+
+```

@@ -1,0 +1,103 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+# input working directory where files and scripts have been saved
+
+working.directory<-"C:/Users/ruthd/Dropbox/COVID/Nature/files for analysis" # enter working directory where files have been downloaded to
+  
+
+############# Dependancies##############################################
+
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+
+
+p_load("readxl","readr", 
+       "pheatmap","plotly",
+       "data.table",
+       "reshape",
+       "tidyr",
+       "edgeR",
+       "stringr",
+       "ggplot2",
+       "Glimma",
+       "plotly",
+       "stringi",
+       "textclean",
+       "RColorBrewer",
+       "readr",
+       "stringi",
+       "preprocessCore",
+       "reshape2",
+       "gplots",
+       "circlize",
+       "gprofiler2",
+       "magrittr",
+       "rJava",
+       "xlsx",
+       "ggpubr",
+       "rstatix",
+       "plotrix",
+       "factoextra",
+       "ggnewscale",
+       "cowplot",
+       "Rtsne",
+       "ggrepel")
+
+# load stage 1 results tables
+
+load(paste0(working.directory,"/COVID_stage1_sRNA_analyses_results_fit_object.RData"))
+
+
+# load =stage 2 results tables
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+
+```
+
+
+```{r select contrast of interest to input to MIEAA2}
+
+#1. baseline comparisons e.g. D0 vs CT
+# unpaired is best as not enough D0 for COVID phase 2 people i.e. most CT+ves
+# Don't include RCC as very few RCC for D0
+
+
+#2. Cross sectional comparisons e.g. CT +ve Men vs C+ve Chad
+# unpaired is best 
+# include RCC
+
+
+#3. longitudinal comparisons e.g. CT vs D7
+# paired is best 
+# include RCC
+
+j=3
+i=9
+
+fit2.final<-EXT.analysis.2 # choose results table to query
+
+result<-topTable(fit2.final[[j]], coef=colnames(fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(fit2.final[[1]]), confint = T) # to change the number of top genes to select alter n= argument. NB in the manual it uses topTreat instead of topTable when treat has been used. The two functions are the same though. I can use either TopTreat or TopTable and the result will be identical. 
+
+title1<-colnames(fit2.final[[j]]$contrasts)[i]
+title1
+
+result.ranked<-result[order(result$t,decreasing = T),] #  ranked by t
+
+result.ranked<-result.ranked[grepl("hsa-miR|hsa-let",rownames(result.ranked)),]
+result.ranked<-result.ranked[!grepl("hp",rownames(result.ranked)),]
+
+
+cat(paste0(rownames(result.ranked),"\n",collapse = "")) #  ranked by signed t - submit this to MIEAA2 online @ https://ccb-compute2.cs.uni-saarland.de/mieaa/user_input/
+
+
+
+
+```
+

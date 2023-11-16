@@ -1,0 +1,1784 @@
+---
+title: "R Notebook"
+output:
+  html_notebook:
+    toc: true
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+---
+
+# Comparing mRNA GSEA results with sRNA GSEA result
+
+
+```{r pre requisites, include=FALSE}
+
+# input working directory where files and scripts have been saved
+
+working.directory<-"C:/Users/ruthd/Dropbox/COVID/Nature/files for analysis" # enter working directory where files have been downloaded to
+  
+ 
+
+
+if (!require("pacman")) install.packages("pacman"); library(pacman)
+
+
+p_load("readxl","readr", 
+       "pheatmap","plotly",
+       "data.table",
+       "reshape",
+       "tidyr",
+       "edgeR",
+       "stringr",
+       "ggplot2",
+       "Glimma",
+       "plotly",
+       "stringi",
+       "textclean",
+       "RColorBrewer",
+       "readr",
+       "stringi",
+       "preprocessCore",
+       "reshape2",
+       "gplots",
+       "circlize",
+       "gprofiler2",
+       "Rtsne",
+       "magrittr",
+       "cowplot",
+       "ggpubr")
+
+
+
+## FUNCTION: KS GENESCORE  FROM   https://rdrr.io/github/montilab/BS831/src/R/ksGenescore.R
+##
+## simple wrapper of function ks.test to allow for plot generation and signed statistic
+##
+#' @export
+
+ksGenescore <- function(
+    n.x,               # length of ranked list
+    y,                 # positions of geneset items in ranked list (basically, ranks)
+    do.pval=TRUE,      # compute asymptotic p-value
+    alternative=c("two.sided","greater","less"),
+    do.plot=F,         # draw the ES plot
+    bare=FALSE,        # return score & p-value only (a 2-tuple)
+    cls.lev=c(0,1),    # class labels to display
+    absolute=FALSE,    # takes max - min score rather than the maximum deviation from null
+    plot.labels=FALSE, # hits' labels
+    ...                # additional plot arguments
+)
+{
+  # efficient version of ks.score (should give same results as ks.test, when weight=NULL)
+  #
+  alternative <- match.arg(alternative)
+  n.y <- length(y)
+  if ( n.y < 1 )  stop("Not enough y data")
+  if ( any(y>n.x) ) stop( "y must be <= n.x: ", max(y) )
+  if ( any(y<1) ) stop( "y must be positive: ", min(y) )
+  x.axis <- y.axis <- NULL
+  
+  # KS score
+  #
+  y <- sort(y)
+  n <- n.x * n.y/(n.x + n.y)
+  hit <- 1/n.y
+  mis <- 1/n.x
+  
+  ## to compute score, only the y positions and their immediate preceding
+  ## ..positions are needed
+  ##
+  Y <- sort(c(y-1,y)); Y <- Y[diff(Y)!=0]; y.match <- match(y,Y)
+  D <- rep( 0, length(Y) ); D[y.match] <- (1:n.y)
+  zero <- which(D==0)[-1]; D[zero] <- D[zero-1]
+  
+  z <- D*hit - Y*mis
+  
+  score <- if (absolute) max(z)-min(z) else z[which.max(abs(z))]
+  names(score) <- "D"
+  
+  if (do.plot) {
+    x.axis <- Y;
+    y.axis <- z;
+    if(Y[1]>0) {
+      x.axis <- c(0,x.axis);
+      y.axis <- c(0,y.axis);
+    }
+    if ( max(Y)<n.x ) {
+      x.axis <- c(x.axis,n.x)
+      y.axis <- c(y.axis,0)
+    }
+    plot( x.axis, y.axis, type="l",
+          xlab=paste("up-regulated for class ", cls.lev[2], " (KS>0) vs ",
+                     "up-regulated for class ", cls.lev[1], " (KS<0)", sep="" ),
+          ylab="gene hits",...)
+    abline(h=0)
+    abline(v=n.x/2,lty=3)
+    axis(1,at=y,labels=plot.labels,tcl=0.25,las=2)
+    i.max <- which.max(abs(y.axis))
+    points( x.axis[i.max], y.axis[i.max], pch=20, col="red")
+    text(x.axis[i.max]+n.x/20,y.axis[i.max],round(y.axis[i.max],2))
+  }
+  if ( !do.pval ) {
+    return(score)
+  }
+  ## ELSE compute p-value as in function ks.test but return signed statistic
+  ##
+  tmp <- suppressWarnings(ks.test(1:n.x,y,alternative=alternative))
+  tmp$statistic <- score # use the signed statistic
+  return( if (bare) c(tmp$statistic, tmp$p.value) else tmp )
+}
+
+
+```
+
+```{r load mRNA table, echo=FALSE}
+ 
+unzip(paste0(working.directory,"/mRNA_stage2_GSEA_results.zip"),  exdir =working.directory , overwrite = TRUE)
+
+list.files<-list.files(paste0(working.directory,"/mRNA_stage2_GSEA_results"),
+                       full.names=T)
+
+df.mRNA.signig.miRs<-data.frame(matrix(nrow=1,ncol=2))
+
+for(i in 1: length(list.files)){
+  temp<-fread(list.files[i])
+  object.name<-gsub(paste0(working.directory,"/mRNA_stage2_GSEA_results/COVID_omics_follow_up_fgsea"),"stage2_",list.files[i]) %>%
+    gsub("compare_|_C3_MIR_MIRDB_2022-02-08.txt","",.) %>%
+    paste0("mRNAs_miR_list_",.)
+  
+  print(object.name)
+  assign(object.name,temp)
+  df.mRNA.signig.miRs[i,]<-c(object.name,sum(temp$padj<0.05))
+}
+df.mRNA.signig.miRs$X2<-as.numeric(df.mRNA.signig.miRs$X2)
+
+
+# stage1 
+
+unzip(paste0(working.directory,"/mRNA_stage1_GSEA_results.zip"),  exdir =working.directory , overwrite = TRUE)
+
+
+list.files<-list.files(paste0(working.directory,"/mRNA_stage1_GSEA_results"),
+                       full.names=T)
+
+df.stage1.mRNA.signig.miRs<-data.frame(matrix(nrow=1,ncol=2))
+
+for(i in 1: length(list.files)){
+  temp<-fread(list.files[i])
+  object.name<-gsub(paste0(working.directory,"/mRNA_stage1_GSEA_results/COVID_omics_pilot_fgsea"),"stage1_",list.files[i]) %>%
+    gsub("compare_|_C3_MIR_MIRDB_2022-02-08.txt","",.) %>%
+    paste0("mRNAs_miR_list_",.)
+  
+  print(object.name)
+  assign(object.name,temp)
+  df.stage1.mRNA.signig.miRs[i,]<-c(object.name,sum(temp$padj<0.05))
+}
+
+df.stage1.mRNA.signig.miRs$X2<-as.numeric(df.stage1.mRNA.signig.miRs$X2)
+
+
+# go through each of mRNAs analyses and see how many Mirs are fdr signif.
+
+# load all stage1 results
+load(paste0(working.directory,"/COVID_stage1_sRNA_analyses_results_fit_object.RData"))
+
+
+# load all stage2 results
+
+load(paste0(working.directory,"/COVID_stage2_analyses_results_fit_object.RData"))
+
+```
+
+
+```{r miRNA enrichment analsysis stage1 data,  results="hide", echo=FALSE}
+# are miRNAs enriched at one end of the mRNA list?
+# use the miRNA only results 
+
+analysis.setup.selection<-2
+
+
+of.interest<-"CT.had.COVID.MEN_vs_CT.had.COVID.ChAdOx"
+of.interest.mRNA<-"mRNAs_miR_list_Stage2_ChAdOx_vs_MENACWY_CT_PCRpos"
+mRNA.result<-get(of.interest.mRNA)
+
+
+sum(mRNA.result$padj<0.05) 
+sum(mRNA.result$padj<0.05) 
+
+
+# select correct stage1 analysis
+if(analysis.setup.selection==1){
+  pilot.fit2.final<-pilot.analysis.1
+  pilot.contrast.options<-pilot_contrast.options_analysis.1
+  EXT.fit2.final<-EXT.analysis.1
+  EXT.contrast.options<-EXT_contrast.options_analysis.1
+} else if(analysis.setup.selection==2){
+  pilot.fit2.final<-pilot.analysis.2
+  pilot.contrast.options<-pilot_contrast.options_analysis.2
+  EXT.fit2.final<-EXT.analysis.2
+  EXT.contrast.options<-EXT_contrast.options_analysis.2
+}else if(analysis.setup.selection==3){
+  pilot.fit3.final<-pilot.analysis.3
+  pilot.contrast.options<-pilot_contrast.options_analysis.3
+  EXT.fit2.final<-EXT.analysis.3
+  EXT.contrast.options<-EXT_contrast.options_analysis.3
+}
+
+
+
+
+j<-EXT.contrast.options[grep(of.interest,EXT.contrast.options$contrast_name),]$j
+i<-EXT.contrast.options[grep(of.interest,EXT.contrast.options$contrast_name),]$i
+
+
+result<-topTable(EXT.fit2.final[[j]], coef=colnames(EXT.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(EXT.fit2.final[[1]]), confint = T)
+# keep only FDR<0.05
+result$miR<-rownames(result)
+signif.result<-result[result$adj.P.Val<0.05,]
+
+
+mRNA.result$miR<-tolower(mRNA.result$pathway) %>% 
+  gsub("mir","hsa-miR-",.) %>%
+  gsub("_","-",.)
+
+signif.mRNAs<-mRNA.result[mRNA.result$padj<0.05,]
+cat(" no. miRs in mRNAs data that are seen in sRNA")
+table(mRNA.result$miR%in%result$miR) 
+cat(" no. miRs in sRNA data")
+
+table(grepl("hsa-miR-|hsa-let-",result$miR)) 
+
+mRNA.result$miR[mRNA.result$miR%in%result$miR] # the common miRs
+
+# looking at cross over in significant results
+
+signif.result$miR[signif.result$miR %in%mRNA.result$miR] 
+
+cat("miRs signif in mRNA and present sRNA data")
+table(signif.mRNAs$miR %in%result$miR) 
+
+cat("miRs signif in mRNA and signif in sRNA data")
+signif.mRNAs$miR[signif.mRNAs$miR%in%signif.result$miR] 
+
+# merge sRNA and mRNA results
+
+merged.df<-merge(mRNA.result,result)# only includes miRs seen in both
+
+if(of.interest=="D7_had_COVID_vs_CT_COVID"){
+  merged.df$logFC <-merged.df$logFC*-1
+  
+}
+
+
+merged.df<-merged.df[merged.df$adj.P.Val<0.05,]
+merged.df$agreement<-(merged.df$NES<0)==(merged.df$t<0)
+
+merged.df$mRNA.FDR.based.on.common.miRS<-p.adjust(merged.df$pval,method="fdr")
+merged.df$sRNA.FDR.based.on.common.miRS<-p.adjust(merged.df$P.Value,method="fdr")
+
+sum(merged.df$pval<0.05&merged.df$P.Value<0.05)
+
+merged.df$miR[merged.df$pval<0.05&merged.df$P.Value<0.05]
+
+
+sum(merged.df$mRNA.FDR.based.on.common.miRS<0.05&merged.df$sRNA.FDR.based.on.common.miRS<0.05)
+
+
+## NOW compare p vlaues / log FCs / t statistic with enrichment score/ NES / p.value to see if there is a general trend ###
+
+
+ylim<-max(abs(merged.df$NES))
+xlim<-max(abs(merged.df$t))
+
+# how do mRNA NES scores compare with miRNA Fcs across all data
+prop.test<-prop.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+p<-signif(prop.test$p.value,2)
+
+correlation<-cor.test(merged.df$NES,merged.df$t,method="spearman")
+
+title<-of.interest
+
+plot.all.pathways<-ggplot(merged.df,
+                          aes(y=NES,
+                              x=t,
+                              colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  #xlab("log2 foldchange for baseline vs S0 t-statistic")+
+  xlab(expression(paste("t-statistic of ",log[2]," miRNA fold change for baseline vs ",S[0])))+
+  #ylab("miRNA NES in mRNA data")+
+  ylab(expression(paste("miRNA NES based on mRNA differential expression analysis for baseline vs ",S[0])))+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  # stat_smooth(method="lm", colour="black")+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA,"Stage2 cohort: All miRNAs"))+
+  labs(subtitle=paste("Propotion test p=",p,"\n",
+                      "spearman correlation test p=",round(correlation$p.value,3),
+                      "rho = ",round(correlation$estimate,2)))+#  
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+plot.all.pathways
+
+
+Downreg.miRs<-merged.df$miR[merged.df$adj.P.Val<0.05&merged.df$logFC<0] 
+
+upreg.miRs<-merged.df$miR[merged.df$adj.P.Val<0.05&merged.df$logFC>0] # 
+
+# NES score of down reg miRs
+
+
+ggplot(mapping=aes(y=merged.df$NES[merged.df$miR%in%Downreg.miRs],
+                   x="down"))+
+  geom_boxplot(outlier.alpha = 0)+
+  geom_jitter(size=3,width=0.2,alpha=0.5)+
+  geom_boxplot(mapping=aes(y=merged.df$NES[merged.df$miR%in%upreg.miRs],
+                           x="upreg miRs"),outlier.alpha = 0)+
+  geom_jitter(mapping=aes(y=merged.df$NES[merged.df$miR%in%upreg.miRs],
+                          x="upreg miRs"),
+              size=3,width=0.2,alpha=0.5)+
+  #     ylab(expression(paste("miRNA NES based on mRNA differential expression analysis for", S[7]," vs ",S[0])))+
+  # xlab(expression(paste("Direction of foldchange of miRNAs signficantly differentially expressed between ",S[7]," and ",S[0])))+
+  ylab(expression(paste("miRNA NES based on mRNA differential expression analysis for baseline vs ",S[0])))+
+  xlab(expression(paste("Direction of foldchange of miRNAs signficantly differentially expressed between baseline and ",S[0])))+
+  geom_hline(yintercept = 0,lty=2)+
+  theme_minimal()+
+  scale_x_discrete(
+    # labels=c("down"=expression(paste("Downregulated at ",S[7]," compared with ",S[0])),
+    #          "upreg miRs"=expression(paste("Upregulated at ",S[7]," compared with ",S[0])))
+    # )+
+    labels=c("down"=expression(paste("Downregulated at ",S[0]," compared with baseline")),
+             "upreg miRs"=expression(paste("Upregulated at ",S[0]," compared with baseline")))
+  )+
+  theme(text = element_text(size=12))
+
+
+wilcox.test<-wilcox.test(merged.df$NES[merged.df$miR%in%Downreg.miRs],alternative="greater")
+
+
+wilcox.test<-wilcox.test(merged.df$NES[merged.df$miR%in%upreg.miRs],alternative="less")
+
+wilcox.test(merged.df$NES[merged.df$miR%in%Downreg.miRs],
+            merged.df$NES[merged.df$miR%in%upreg.miRs],
+            alternative="greater")
+
+options(scipen="0")
+round<-ceiling(-log10(wilcox.test$p.value)+2)
+round(wilcox.test$p.value,round)
+
+# For all miRNAs that were picked up in the data is there a global enrichment in mRNAs' data for agreement or disagreement ? this is an alternative to arbitrarily using a p-value cutouff to compare enrichment using "defo chnaged" and "did not change" values. 
+
+
+# first get ranks
+#merged.df$rank.p.sRNA<-rank(merged.df$t*-1)
+merged.df$rank.p.sRNA<-rank(merged.df$P.Value)
+merged.df$rank.p.mRNA<-rank(merged.df$NES*-1,ties.method = "random")
+
+
+
+ksGenescore(nrow(merged.df),
+            merged.df$rank.p.sRNA[merged.df$agreement=="TRUE"],
+            do.plot=TRUE) 
+
+ksGenescore(nrow(merged.df),
+            merged.df$rank.p.sRNA[merged.df$agreement=="FALSE"],
+            do.plot=TRUE) 
+
+ksGenescore(nrow(merged.df),
+            merged.df$rank.p.mRNA[merged.df$agreement=="TRUE"],
+            do.plot=TRUE) 
+
+ksGenescore(nrow(merged.df),
+            merged.df$rank.p.mRNA[merged.df$agreement=="FALSE"],
+            do.plot=TRUE) 
+
+# ABS NES vs t statistic - i.e. does NES and t-correlate
+
+p<-ggplot(merged.df,
+          aes(y=abs(NES),
+              x=abs(t),
+              colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+cor.test(abs(merged.df$NES),abs(merged.df$t)) 
+
+cor.test(merged.df$NES,merged.df$t)   
+
+
+merged.p.less.than.05<-merged.df[abs(merged.df$NES)>=summary(abs(merged.df$NES))[5]&abs(merged.df$t)>=summary(abs(merged.df$t))[5],]
+
+prop.test<-prop.test(x=sum((merged.p.less.than.05$t>0)==(merged.p.less.than.05$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+p<-signif(prop.test$p.value,2)
+
+
+plot.most.signifpathways<-ggplot(merged.p.less.than.05,
+                                 aes(y=NES,
+                                     x=t,
+                                     colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  xlab("t statistic")+
+  ggtitle("Stage2 cohort: miRNAs in top \n25th percentile for enrichment scores and log2 foldchanges")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+plot.most.signifpathways
+
+# any correlation at the absolute level?
+
+# NES vs t statistic
+p<-ggplot(merged.p.less.than.05,
+          aes(y=abs(NES),
+              x=abs(t),
+              colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment agrees \nwith direction of log2FC")
+
+
+
+cor.test(abs(merged.p.less.than.05$NES),abs(merged.p.less.than.05$t))  # 
+
+cor.test(merged.p.less.than.05$NES,merged.p.less.than.05$t) 
+
+
+merged.dont.change<-merged.df[abs(merged.df$NES)<=summary(abs(merged.df$NES))[2]&abs(merged.df$t)<=summary(abs(merged.df$t))[2],]
+
+prop.test<-prop.test(x=sum((merged.dont.change$t>0)==(merged.dont.change$NES>0)), n=nrow(merged.dont.change), p=.5)
+p<-signif(prop.test$p.value,2)
+
+plot.least.signif.pathways<-ggplot(merged.dont.change,
+                                   aes(y=NES,
+                                       x=t,
+                                       colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  xlab("t statistic")+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  ggtitle("Stage2 cohort: miRNAs in bottom \n25th percentile for enrichment scores and log2 foldchanges")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+#merged.p.less.than.05<-merged.df[merged.df$pval<0.05&merged.df$P.Value<0.05,]
+#merged.p.less.than.05<-merged.df[merged.df$pval<0.05&abs(merged.df$t)>=summary(abs(merged.df$t))[5],]
+(merged.dont.change$NES<0)==(merged.dont.change$t<0)
+
+sum(merged.df$t<0) # 200
+sum(merged.df$NES>0&merged.df$t>0)
+sum(merged.df$NES>0&merged.df$t<0) #117
+sum(merged.df$NES>0&merged.df$t>0)
+sum(merged.df$NES>0&merged.df$t>0)
+
+contigency.table.all<-table(merged.df$NES>0,merged.df$t>0) # create a contigency table
+t(contigency.table.all)
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+# kappa  
+library("vcd")
+res.k <- Kappa(contigency.table.all)
+res.k
+
+binom.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+
+
+mosaicplot(contigency.table.all,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+
+contigency.table.p.less.than.05.both<-table(merged.p.less.than.05$t>0,merged.p.less.than.05$NES>0) # create a contigency table
+contigency.table.p.less.than.05.both
+
+cat("chi squared all")
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+chisq.test(contigency.table.p.less.than.05.both) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+cat("binom all")
+prop.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+
+cat("enriched for things which change")
+
+prop.test(x=sum((merged.p.less.than.05$t>0)==(merged.p.less.than.05$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+
+
+prop.test(x=sum((merged.dont.change$t>0)==(merged.dont.change$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+
+
+mosaicplot(contigency.table.p.less.than.05.both,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+p<-get_legend(p)
+
+
+library(cowplot)
+
+plot_grid(plot.all.pathways,
+          plot.most.signifpathways,
+          plot.least.signif.pathways
+          ,p,
+          labels=c("A","B","C",""))
+
+agreement.vs.p<-ggplot(merged.df, aes(
+  y=abs(logFC),
+  x=agreement,
+  colour=agreement,
+  fill=agreement))+
+  ggtitle("Stage2 cohort")+
+  xlab("Enrichment direction agrees \nwith direction of log2 foldchange?")+
+  ylab("miRNA log2 foldchange")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+agreement.vs.NES<-ggplot(merged.df,
+                         aes(
+                           y=abs(NES),
+                           x=agreement,
+                           colour=merged.df$agreement,
+                           fill=merged.df$agreement))+
+  xlab("Enrichment direction agrees with direction of log2 foldchange?")+
+  ylab("strength of enrichment (absoulute enrichment score)")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+plot_grid(plot.all.pathways,plot.most.signifpathways,plot.least.signif.pathways,
+          agreement.vs.p,p,
+          labels=c("A","B","C","D",""))
+
+
+
+```
+
+```{r miRNA enrichment analsysis stage1 data, eval=TRUE, include=FALSE, results='hide'}
+
+analysis.setup.selection<-1
+
+of.interest.stage1<-"D0_all_vs_CT_COVID"
+of.interest.mRNA.stage1<-"mRNAs_miR_list_stage1_D0_CT_PCRpos"
+mRNA.result<-get(of.interest.mRNA.stage1)
+# select correct stage1 analysis
+if(analysis.setup.selection==1){
+  pilot.fit2.final<-pilot.analysis.1
+  pilot.contrast.options<-pilot_contrast.options_analysis.1
+  EXT.fit2.final<-EXT.analysis.1
+  EXT.contrast.options<-EXT_contrast.options_analysis.1
+} else if(analysis.setup.selection==2){
+  pilot.fit2.final<-pilot.analysis.2
+  pilot.contrast.options<-pilot_contrast.options_analysis.2
+  EXT.fit2.final<-EXT.analysis.2
+  EXT.contrast.options<-EXT_contrast.options_analysis.2
+}else if(analysis.setup.selection==3){
+  pilot.fit3.final<-pilot.analysis.3
+  pilot.contrast.options<-pilot_contrast.options_analysis.3
+  EXT.fit2.final<-EXT.analysis.3
+  EXT.contrast.options<-EXT_contrast.options_analysis.3
+}
+
+
+
+
+
+j<-pilot.contrast.options[pilot.contrast.options$contrast_name==of.interest.pilot,]$j
+i<-pilot.contrast.options[pilot.contrast.options$contrast_name==of.interest.pilot,]$i
+
+result<-topTable(pilot.fit2.final[[j]], coef=colnames(pilot.fit2.final[[j]]$contrasts)[i], sort.by = "p", n=nrow(pilot.fit2.final[[1]]), confint = T)
+# keep only FDR<0.05
+result$miR<-rownames(result)
+signif.result<-result[result$adj.P.Val<0.05,]
+
+# look at miRs enriched according to mRNA analysis
+mRNA.result$miR<-tolower(mRNA.result$pathway) %>%  # convert mRNA miR name format into sRNA format  i.e. MIR4505 --> hsa-miR-505-3p
+  gsub("mir","hsa-miR-",.) %>%
+  gsub("_","-",.)
+
+signif.mRNAs<-mRNA.result[mRNA.result$padj<0.05,]
+cat(" no. miRs in mRNAs data that are seen in sRNA")
+table(mRNA.result$miR%in%result$miR) 
+cat(" no. miRs in sRNA data")
+
+table(grepl("hsa-miR-|hsa-let-",result$miR)) 
+
+mRNA.result$miR[mRNA.result$miR%in%result$miR] # the common miRs
+
+# looking at cross over in significant results
+
+signif.result$miR[signif.result$miR %in%mRNA.result$miR] 
+
+cat("miRs signif in mRNA and present sRNA data")
+table(signif.mRNAs$miR %in%result$miR)
+
+cat("miRs signif in mRNA and signif in sRNA data")
+signif.mRNAs$miR[signif.mRNAs$miR%in%signif.result$miR] 
+
+
+## compare p vlaues / log FCs / t statistic with enrichment score/ NES / p.value ###
+
+# merge sRNA and mRNA results
+
+merged.df<-merge(mRNA.result,result)# only includes miRs seen in both
+merged.df$agreement<-(merged.df$NES<0)==(merged.df$t<0)
+
+ylim<-max(abs(merged.df$NES))
+xlim<-max(abs(merged.df$t))
+
+prop.test<-prop.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+p<-signif(prop.test$p.value,2)
+
+stage1.plot.all.pathways<-ggplot(merged.df,
+                                aes(y=NES,
+                                    x=t,
+                                    colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  xlab("t statistic")+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  ggtitle("stage1 cohort: All miRNAs")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+ ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  # ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+
+# NES vs t statistic
+
+p<-ggplot(merged.df,
+          aes(y=abs(NES),
+              x=abs(t),
+              colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+cor.test(abs(merged.df$NES),abs(merged.df$t))  
+cor.test(merged.df$NES,merged.df$t)   
+
+
+merged.p.less.than.05<-merged.df[abs(merged.df$NES)>=summary(abs(merged.df$NES))[5]&abs(merged.df$t)>=summary(abs(merged.df$t))[5],]
+
+merged.dont.change<-merged.df[abs(merged.df$NES)<=summary(abs(merged.df$NES))[2]&abs(merged.df$t)<=summary(abs(merged.df$t))[2],]
+
+prop.test<-prop.test(x=sum((merged.p.less.than.05$t>0)==(merged.p.less.than.05$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+p<-signif(prop.test$p.value,2)
+
+stage1.plot.most.signifpathways<-ggplot(merged.p.less.than.05,
+                                       aes(y=NES,
+                                           x=t,
+                                           colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  xlab("t statistic")+
+  ggtitle("stage1 cohort: miRNAs in top \n25th percentile for enrichment scores and log2 foldchanges")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))++#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+
+ggplot(merged.p.less.than.05,
+       aes(y=NES,
+           x=t,
+           colour=(NES<0)==(t<0)))+
+  # geom_point(mapping=aes(y=merged.dont.change$NES,
+  #                        x=merged.dont.change$t,
+  #          colour=(merged.dont.change$NES<0)==(merged.dont.change$t<0)),
+  #          pch=2)+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+prop.test<-prop.test(x=sum((merged.dont.change$t>0)==(merged.dont.change$NES>0)), n=nrow(merged.dont.change), p=.5)
+p<-signif(prop.test$p.value,2)
+
+stage1.plot.least.signif.pathways<-ggplot(merged.dont.change,
+                                         aes(y=NES,
+                                             x=t,
+                                             colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  xlab("t statistic")+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  ggtitle("stage1 cohort: miRNAs in bottom 25th percentile for \nenrichment scores and log2 foldchanges")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  #  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+# NES vs t statistic
+p<-ggplot(merged.p.less.than.05,
+          aes(y=abs(NES),
+              x=abs(t),
+              colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment agrees \nwith direction of log2FC")
+
+
+
+cor.test(abs(merged.p.less.than.05$NES),abs(merged.p.less.than.05$t))  
+cor.test(merged.p.less.than.05$NES,merged.p.less.than.05$t) 
+
+#merged.p.less.than.05<-merged.df[merged.df$pval<0.05&merged.df$P.Value<0.05,]
+#merged.p.less.than.05<-merged.df[merged.df$pval<0.05&abs(merged.df$t)>=summary(abs(merged.df$t))[5],]
+(merged.dont.change$NES<0)==(merged.dont.change$t<0)
+
+ggplot(merged.dont.change,
+       aes(y=NES,
+           x=t,
+           colour=(NES<0)==(t<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+contigency.table.all<-table(merged.df$t>0,merged.df$NES>0) # create a contigency table
+contigency.table.all
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+binom.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+
+
+mosaicplot(contigency.table.all,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+
+contigency.table.p.less.than.05.both<-table(merged.p.less.than.05$t>0,merged.p.less.than.05$NES>0) # create a contigency table
+contigency.table.p.less.than.05.both
+
+cat("chi squared all")
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+chisq.test(contigency.table.p.less.than.05.both) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+cat("binom all")
+prop.test(x=sum((merged.df$t>0)==(merged.df$NES>0)), n=nrow(merged.df), p=.5)
+
+cat("enriched for things which change")
+
+prop.test(x=sum((merged.p.less.than.05$t>0)==(merged.p.less.than.05$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+
+
+prop.test(x=sum((merged.dont.change$t>0)==(merged.dont.change$NES>0)), n=nrow(merged.p.less.than.05), p=.5)
+
+
+mosaicplot(contigency.table.p.less.than.05.both,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+p<-get_legend(p)
+
+
+
+plot_grid(stage1.plot.all.pathways,stage1.plot.most.signifpathways,stage1.plot.least.signif.pathways,p,
+          labels=c("A","B","C",""))
+
+stage1.agreement.vs.p<-ggplot(merged.df,
+                             aes(
+                               y=abs(logFC),
+                               x=agreement,
+                               colour=agreement,
+                               fill=agreement))+
+  ggtitle("stage1 cohort")+
+  xlab("Enrichment direction agrees \nwith direction of log2 foldchange?")+
+  ylab("miRNA log2 foldchange")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+  
+  ggtitle("stage1 cohort")+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10))
+
+agreement.vs.NES<-ggplot(merged.df,
+                         aes(
+                           y=abs(NES),
+                           x=agreement,
+                           colour=merged.df$agreement,
+                           fill=merged.df$agreement))+
+  xlab("Enrichment direction agrees \nwith direction of log2 foldchange?")+
+  ylab("signicance of miRNA log2 foldchange \n(p-value)")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10),
+        axis.title=element_text(size=10))
+
+plot_grid(stage1.plot.all.pathways,stage1.plot.most.signifpathways,stage1.plot.least.signif.pathways,
+          agreement.vs.p,agreement.vs.NES,p,
+          labels=c("A","B","C","D","E",""))
+
+plot_grid(stage1.plot.all.pathways,stage1.plot.most.signifpathways,stage1.plot.least.signif.pathways,
+          stage1.agreement.vs.p,
+          plot.all.pathways,plot.most.signifpathways,plot.least.signif.pathways,
+          agreement.vs.p,
+          labels=c("AUTO"),
+          nrow=2)
+
+cat(paste0(c(of.interest,of.interest.mRNA,of.interest.stage1,of.interest.mRNA.stage1),collapse="\n"))
+
+```
+
+
+
+
+```{r Compare MIEAA2 GO with mRNA GO}
+
+# Compare GO biological processes.
+
+
+# load mRNA GO
+# load mRNA table 
+
+
+
+list.files<-list.files(paste0(working.directory,"/mRNA_stage2_GSEA_results/"),
+                       full.names=T)
+
+list.files <- list.files[grepl("C5",list.files)]
+
+df.mRNA.signig.GSEA<-data.frame(matrix(nrow=1,ncol=2))
+
+for(i in 1: length(list.files)){
+  temp<-fread(list.files[i])
+  object.name<-basename(list.files[i]) %>%
+    gsub("COVID_omics|_2022-02-08.txt","",.) %>%
+    paste0("mRNAs",.)
+  
+  print(object.name)
+  assign(object.name,temp)
+  df.mRNA.signig.GSEA[i,]<-c(object.name,sum(temp$padj<0.05))
+}
+df.mRNA.signig.GSEA$X2<-as.numeric(df.mRNA.signig.GSEA$X2)
+
+
+# stage1 
+list.files<-list.files(paste0(working.directory,"/mRNA_stage1_GSEA_results"),
+                       full.names=T,
+                       recursive=T)
+
+df.stage1.mRNA.signig.miRs<-data.frame(matrix(nrow=1,ncol=2))
+
+for(i in 1: length(list.files)){
+  temp<-fread(list.files[i])
+  object.name<-basename(list.files[i]) %>%
+    gsub("2022-02-08.txt","",.) %>%
+    paste0("mRNAs_",.)
+  
+  print(object.name)
+  assign(object.name,temp)
+  df.stage1.mRNA.signig.miRs[i,]<-c(object.name,sum(temp$padj<0.05))
+}
+
+df.stage1.mRNA.signig.miRs$X2<-as.numeric(df.stage1.mRNA.signig.miRs$X2)
+
+# load sRNA GO
+
+
+#load miEA GO analsysis
+
+library(utils)
+
+rv2<-readRDS(paste0(working.directory,"/COVID_stage2_consolidated.mieaa2.enrichment.table.RDS"))
+
+
+rv2<-rv2[grepl("Annotations derived over miRTarBase \\(Gene Ontology\\)",rv2$Category)&rv2$biological_process==T,] # select out GO pathways
+
+rv2$common_name<-toupper(rv2$Subcategory) %>%
+  sub("\\s+[^ ]+$", "", .) %>%
+  gsub(" ","_",.) %>%
+  gsub("-","_",.)
+
+rv2 %<>% data.frame(.)
+
+
+of.interest<-"D0vsCT"
+of.interest.mRNA<-"mRNAs_follow_up_fgseaD0_CT_MENACWY_C5_BP"
+
+sRNA<-rv2[,c(1,2,grep(of.interest,colnames(rv2)))] 
+mRNAs<-get(of.interest.mRNA) # 
+
+sRNA$p<-sRNA[,grepl("P.value",colnames(sRNA))]
+
+if(!of.interest=="D7vsCT"){
+  sRNA$enrichment_sign<-sRNA[,grepl("Enrichment_sign",colnames(sRNA))]
+  sRNA$enrichment_sign %<>% gsub("enriched",1,.) %>% gsub("depleted",-1,.) %>% as.numeric(.)
+  sRNA$common_name<-rv2$common_name
+  }
+
+if(of.interest=="D7vsCT"){ # because the CT vs D7 contrast was written the other way round in the mRNA analysis. 
+  
+  
+  sRNA$enrichment_sign<-sRNA[,grepl("Enrichment_sign",colnames(sRNA))]
+  sRNA$enrichment_sign %<>% gsub("enriched",-1,.) %>% gsub("depleted",1,.) %>% as.numeric(.)
+  sRNA$common_name<-rv2$common_name}
+
+sRNA$signed.log10.p.value<-(-log10(sRNA$p)*(sRNA$enrichment_sign)) # this gives the magnitude of signficance multiplied by enrichment direction.  Call this column "signed.log10.p.value" but really it should be called signed.minus.log10.p.value
+
+
+mRNAs$common_name<-gsub("GOBP_","",mRNAs$pathway)
+
+table(rv2$common_name[rv2$Category=="Annotations derived over miRTarBase (Gene Ontology)"] %in% mRNAs$common_name) # 
+
+
+mRNAs$sign<-mRNAs$NES<0
+mRNAs$sign[mRNAs$sign==T]<--1
+mRNAs$sign[mRNAs$sign==F]<-1
+
+mRNAs$mRNA_signed.log10.p.value<-(-log10(mRNAs$pval)*(mRNAs$sign))
+
+merged.df<-merge(mRNAs,sRNA)
+merged.df$agreement<-merged.df$enrichment_sign==merged.df$sign
+
+
+## not all pathways are in both datasets, this will be because we will have specified that only pathways containing at least n features in our data set should be interrogated. 
+
+## compare p vlaues / log FCs / t statistic with enrichment score/ NES / p.value ###
+
+# merge sRNA and mRNA results
+
+# for mRNA could use the NES or the mRNA_signed.log10.p.value
+# for sRNA -- have to use the p-value times the sign = signed.log10.p.value
+
+# sRNA GO vs mRNA GO
+
+cor.test<-cor.test(merged.df$mRNA_signed.log10.p.value,
+                   merged.df$signed.log10.p.value)  # weak negative correlation between mRNA scores and sRNA
+
+rho<-round(cor.test$estimate,2)
+round<-ceiling(-log10(cor.test$p.value)+2)
+p<-round(cor.test$p.value,round)
+
+
+prop<-prop.test(
+  x = sum(merged.df$enrichment_sign==merged.df$sign), # number of successes
+  n = nrow(merged.df), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+prop.p<-prop$p.value
+round<-ceiling(-log10(prop.p)+2)
+prop.p<-round(prop.p,round)
+
+
+ggplot(merged.df,
+       aes(y=mRNA_signed.log10.p.value,
+           x=signed.log10.p.value,
+           fill=merged.df$agreement))+
+  geom_point(size=3.5,shape=21,alpha=0.7)+#,fill=alpha("dark grey",alpha=0.5),colour="black")+
+  theme_minimal()+
+  geom_vline(xintercept = 0,lwd=1,lty=2)+
+  geom_hline(yintercept = 0,lwd=1,lty=2)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  labs(subtitle = paste("proportion test p-value=",prop.p,"    rho",rho,"    p=",p))+
+  xlim(c(-10,10))+
+  ylim(c(-10,10))+
+  scale_fill_discrete(name="direction of pathway enrichement at \nmRNA and miRNA levels agree")+
+  theme_pubclean()
+
+
+contigency.table.all<-table(merged.df$mRNA_signed.log10.p.value>0,merged.df$enrichment_sign>0) # create a contigency table
+contigency.table.all
+contigency.table.all<-contigency.table.all[c(2,1),] # now in same order as the cross plot graph
+
+
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?) - none for CT vs D7
+
+
+# NES score of down reg miRs
+
+negative.NES.pathways<-merged.df$common_name[merged.df$padj<0.05&merged.df$NES<0]
+positive.NES.pathways<-merged.df$common_name[merged.df$padj<0.05&merged.df$NES>0]
+
+
+
+ggplot(mapping=aes(y=merged.df$signed.log10.p.value[merged.df$common_name%in%negative.NES.pathways],
+                   x="down"))+
+  geom_boxplot(outlier.alpha = 0)+
+  geom_jitter(size=3,width=0.2,alpha=0.5)+
+  geom_boxplot(mapping=aes(y=merged.df$signed.log10.p.value[merged.df$common_name%in%positive.NES.pathways],
+                           x="upreg miRs"),outlier.alpha = 0)+
+  geom_jitter(mapping=aes(y=merged.df$signed.log10.p.value[merged.df$common_name%in%positive.NES.pathways],
+                          x="upreg miRs"),
+              size=3,width=0.2,alpha=0.5)+
+  #     ylab(expression(paste("miRNA NES based on mRNA differential expression analysis for", S[7]," vs ",S[0])))+
+  # xlab(expression(paste("Direction of foldchange of miRNAs signficantly differentially expressed between ",S[7]," and ",S[0])))+
+  ylab(expression(paste("miRNA log10(enrichment p-value) * enrichment sign \nbased on miRNA differential expression analysis for baseline vs ",S[0])))+
+  xlab(expression(paste("Direction of Pathway enrichment at mRNA level at ",S[0]," vs baseline")))+
+  geom_hline(yintercept = 0,lty=2)+
+  theme_minimal()+
+  scale_x_discrete(
+    labels=c("down"=expression(paste("Downregulated at ",S[7]," compared with ",S[0])),
+             "upreg miRs"=expression(paste("Upregulated at ",S[7]," compared with ",S[0])))
+  )+
+  #   labels=c("down"=expression(paste("Downregulated at ",S[0]," compared with baseline")),
+  #          "upreg miRs"=expression(paste("Upregulated at ",S[0]," compared with baseline")))
+  # )+
+  theme(text = element_text(size=14))
+
+
+mosaicplot(t(contigency.table.all),
+           xlab="pathway targetted by miRs (enriched)",
+           ylab="mRNAs upreglated (NES score positive)",
+           shade=T)
+
+
+wilcox.test<-wilcox.test(merged.df$signed.log10.p.value[merged.df$common_name%in%negative.NES.pathways],alternative=)
+options(scipen="0")
+round<-ceiling(-log10(wilcox.test$p.value)+2)
+round(wilcox.test$p.value,round)
+
+wilcox.test
+
+wilcox.test<-wilcox.test(merged.df$signed.log10.p.value[merged.df$common_name%in%positive.NES.pathways],alternative=)
+wilcox.test
+options(scipen="0")
+round<-ceiling(-log10(wilcox.test$p.value)+2)
+round(wilcox.test$p.value,round)
+
+
+wilcox.test(merged.df$signed.log10.p.value[merged.df$common_name%in%negative.NES.pathways],
+            merged.df$signed.log10.p.value[merged.df$common_name%in%positive.NES.pathways],
+            alternative="greater")
+
+
+# NES vs t statistic abs
+ggplot(merged.df,
+       aes(y=abs(mRNA_signed.log10.p.value),
+           x=abs(signed.log10.p.value)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+cor.test(abs(merged.df$mRNA_signed.log10.p.value),abs(merged.df$signed.log10.p.value)) 
+
+
+merged.p.less.than.05 # means anything with a top 25th centile for NES AND a top 25th centile for miR pathway p.value 
+
+merged.p.less.than.05<-merged.df[abs(merged.df$NES)>=summary(abs(merged.df$NES))[5]&abs(merged.df$signed.log10.p.value)>=summary(abs(merged.df$signed.log10.p.value))[5],]
+
+
+ggplot(merged.p.less.than.05,
+       aes(y=NES,
+           x=signed.log10.p.value))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+cor.test(merged.p.less.than.05$NES,merged.p.less.than.05$signed.log10.p.value)  # no correlation for CT
+
+
+merged.dont.change<-merged.df[abs(merged.df$NES)<=summary(abs(merged.df$NES))[2]&abs(merged.df$signed.log10.p.value)<=summary(abs(merged.df$signed.log10.p.value))[2],]
+
+
+ggplot(merged.dont.change,
+       aes(y=NES,
+           x=signed.log10.p.value))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+
+
+
+
+
+contigency.table.p.less.than.05.both<-table(merged.p.less.than.05$signed.log10.p.value>0,merged.p.less.than.05$NES>0) # create a contigency table
+contigency.table.p.less.than.05.both
+
+cat("chi squared all")
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+chisq.test(contigency.table.p.less.than.05.both) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+cat("prop test")
+
+prop.test(
+  x = sum(merged.df$enrichment_sign==merged.df$sign), # number of successes
+  n = nrow(merged.df), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+
+cat("enriched for things which change")
+
+prop.test(
+  x = sum(merged.p.less.than.05$enrichment_sign==merged.p.less.than.05$sign), # number of successes
+  n = nrow(merged.p.less.than.05), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+
+prop.test(
+  x = sum(merged.dont.change$enrichment_sign==merged.dont.change$sign), # number of successes
+  n = nrow(merged.dont.change), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+
+
+
+# cohen's kappa - 
+#install.packages("vcd")
+library("vcd")
+# Compute kapa
+contigency.table.p.less.than.05.both<-table(merged.p.less.than.05$signed.log10.p.value>0,merged.p.less.than.05$NES>0) # create a contigency table
+contigency.table.p.less.than.05.both
+
+contigency.table.all<-table(merged.df$mRNA_signed.log10.p.value<0,merged.df$enrichment_sign<0) # create a contigency table
+
+res.k <- Kappa(contigency.table.all)
+res.k
+# k not signif
+
+#### try enrichment with plot #### 
+
+# first get ranks
+merged.df$rank.p.sRNA<-rank(merged.df$p,ties.method = "random")
+merged.df$rank.p.mRNA<-rank(merged.df$pval,ties.method = "random")
+
+
+ksGenescore(length(merged.df$rank.p.sRNA),merged.df$rank.p.sRNA[merged.df$agreement=="TRUE"],do.plot=TRUE) 
+
+ksGenescore(length(merged.df$rank.p.sRNA),merged.df$rank.p.sRNA[merged.df$agreement=="FALSE"],do.plot=TRUE) 
+
+ksGenescore(length(merged.df$rank.p.sRNA),merged.df$rank.p.mRNA[merged.df$agreement=="TRUE"],do.plot=TRUE) 
+
+ksGenescore(length(merged.df$rank.p.sRNA),merged.df$rank.p.mRNA[merged.df$agreement=="FALSE"],do.plot=TRUE) 
+
+#D0 vs CT only significant for rank.p.mRNA with agreement = TRUE
+
+
+
+#plot agreement by rank
+
+
+merged.df$combined.rank<-merged.df$rank.p.sRNA*merged.df$rank.p.mRNA
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=rank.p.sRNA))+
+  geom_boxplot()+
+  stat_compare_means()
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=rank.p.mRNA))+
+  geom_boxplot()+
+  stat_compare_means()
+
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=combined.rank))+
+  geom_boxplot()+
+  stat_compare_means()
+
+ylim<-max(abs(merged.df$mRNA_signed.log10.p.value))
+xlim<-max(abs(merged.df$signed.log10.p.value))
+
+cor.test<-cor.test(merged.df$mRNA_signed.log10.p.value,
+                   merged.df$signed.log10.p.value)  # weak negative correlation between mRNA scores and sRNA
+
+rho<-round(cor.test$estimate,2)
+round<-ceiling(-log10(cor.test$p.value)+2)
+p<-round(cor.test$p.value,round)
+
+
+prop<-prop.test(
+  x = sum(merged.df$enrichment_sign==merged.df$sign), # number of successes
+  n = nrow(merged.df), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+prop.p<-prop$p.value
+round<-ceiling(-log10(prop.p)+2)
+prop.p<-round(prop.p,round)
+
+
+plot.all.pathways<-ggplot(merged.df,
+                          aes(y=mRNA_signed.log10.p.value,
+                              x=signed.log10.p.value,
+                              fill=merged.df$agreement))+
+  geom_point(size=3.5,shape=21,alpha=0.7)+#,fill=alpha("dark grey",alpha=0.5),colour="black")+
+  theme_minimal()+
+  geom_vline(xintercept = 0,lwd=1,lty=2)+
+  geom_hline(yintercept = 0,lwd=1,lty=2)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  labs(subtitle = paste("proportion test p-value=",prop.p,"    rho",rho,"    p=",p))+
+  xlim(c(-10,10))+
+  ylim(c(-10,10))+
+  scale_fill_discrete(name="direction of pathway enrichement at \nmRNA and miRNA levels agree")+
+  theme_pubclean()
+
+
+cor.test<-cor.test(merged.p.less.than.05$mRNA_signed.log10.p.value,
+                   merged.p.less.than.05$signed.log10.p.value)  # weak negative correlation between mRNA scores and sRNA
+
+rho<-round(cor.test$estimate,2)
+round<-ceiling(-log10(cor.test$p.value)+2)
+p<-round(cor.test$p.value,round)
+
+
+prop<-prop.test(
+  x = sum(merged.p.less.than.05$enrichment_sign==merged.p.less.than.05$sign), # number of successes
+  n = nrow(merged.p.less.than.05), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+prop.p<-prop$p.value
+round<-ceiling(-log10(prop.p)+2)
+prop.p<-round(prop.p,round)
+
+plot.most.signifpathways<- ggplot(merged.p.less.than.05,
+                                  aes(y=mRNA_signed.log10.p.value,
+                                      x=signed.log10.p.value,
+                                      fill=merged.p.less.than.05$agreement))+
+  geom_point(size=3.5,shape=21,alpha=0.7)+#,fill=alpha("dark grey",alpha=0.5),colour="black")+
+  theme_minimal()+
+  geom_vline(xintercept = 0,lwd=1,lty=2)+
+  geom_hline(yintercept = 0,lwd=1,lty=2)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  labs(subtitle = paste("proportion test p-value=",prop.p,"    rho",rho,"    p=",p))+
+  xlim(c(-10,10))+
+  ylim(c(-10,10))+
+  scale_fill_discrete(name="direction of pathway enrichement at \nmRNA and miRNA levels agree")+
+  theme_pubclean()+
+  xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  ggtitle("Stage2 cohort: pathways in top \n25th percentile for significance of enrichment")+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+cor.test<-cor.test(merged.dont.change$mRNA_signed.log10.p.value,
+                   merged.dont.change$signed.log10.p.value)  # weak negative correlation between mRNA scores and sRNA
+
+rho<-round(cor.test$estimate,2)
+round<-ceiling(-log10(cor.test$p.value)+2)
+p<-round(cor.test$p.value,round)
+
+
+prop<-prop.test(
+  x = sum(merged.dont.change$enrichment_sign==merged.dont.change$sign), # number of successes
+  n = nrow(merged.dont.change), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+prop.p<-prop$p.value
+round<-ceiling(-log10(prop.p)+2)
+prop.p<-round(prop.p,round)
+
+plot.least.signif.pathways<- ggplot(merged.dont.change,
+                                    aes(y=mRNA_signed.log10.p.value,
+                                        x=signed.log10.p.value,
+                                        fill=merged.dont.change$agreement))+
+  geom_point(size=3.5,shape=21,alpha=0.7)+#,fill=alpha("dark grey",alpha=0.5),colour="black")+
+  theme_minimal()+
+  geom_vline(xintercept = 0,lwd=1,lty=2)+
+  geom_hline(yintercept = 0,lwd=1,lty=2)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  labs(subtitle = paste("proportion test p-value=",prop.p,"    rho",rho,"    p=",p))+
+  xlim(c(-10,10))+
+  ylim(c(-10,10))+
+  scale_fill_discrete(name="direction of pathway enrichement at \nmRNA and miRNA levels agree")+
+  theme_pubclean()+
+  xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  ggtitle("Stage2 cohort: pathways in bottom \n25th percentile for significance of enrichment")+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+p<-get_legend(plot.least.signif.pathways)
+
+
+
+plot_grid(plot.most.signifpathways,plot.least.signif.pathways,
+          labels=c("A","B")) # appendix
+
+
+plot.all.pathways
+plot.most.signifpathways
+plot.least.signif.pathways
+
+agreement.vs.p<-ggplot(merged.df, 
+                       aes(
+                         y=p,
+                         x=agreement,
+                         colour=agreement,
+                         fill=agreement))+
+  ggtitle("Stage2 cohort")+
+  ylab("signicance of pathway enrichment \n in the miRNA data(p-value)")+
+  xlab("Pathway enrichment direction in \nthe miRNA and mRNA dataset agree?")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+agreement.vs.mRNA_signed.log10.p.value<-ggplot(merged.df,
+                                                 aes(
+                                                   y=pval,
+                                                   x=agreement,
+                                                   colour=agreement,
+                                                   fill=agreement))+
+  ylab("signicance of pathway enrichment \n in the mRNA data(p-value)")+
+  xlab("Pathway enrichment direction in \nthe miRNA and mRNA dataset agree?")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  ggtitle("Stage2 cohort")+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+plot_grid(plot.all.pathways,
+          agreement.vs.p,
+          agreement.vs.mRNA_signed.log10.p.value,
+          labels=c("A","B","C"),
+          nrow=1)
+
+
+# compare histograms
+
+ks<-ks.test(merged.df$mRNA_signed.log10.p.value[merged.df$agreement==T],
+            merged.df$mRNA_signed.log10.p.value[merged.df$agreement==F])
+
+
+
+ks.p<-ks$p.value
+if(ks.p==0){ks.p="< 2.2e-16"}else{
+  round<-ceiling(-log10(ks.p)+2)
+  ks.p<-round(ks.p,round)
+}
+
+
+# needs to be in a long format
+logFC.df.hist.mRNA.p<-ggplot(merged.df, aes(x=mRNA_signed.log10.p.value, fill=agreement))+
+  geom_density(alpha=0.4)+
+  xlim(c(-10,10))+
+  scale_fill_discrete(name="",
+                      labels=c("TRUE"="mRNA GO enrichment sign *agrees* with miRNA GO enrichment sign",
+                               "FALSE"="mRNA GO enrichment sign *disagrees* with miRNA GO enrichment sign")
+  )+
+  labs(subtitle = paste("Kolmogorov-Smirnov test p =",ks.p))+
+  ggtitle(paste(of.interest.mRNA, "mRNA_signed.log10.p.value"))+
+  theme_pubclean()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 14))
+logFC.df.hist.mRNA.p
+
+
+ks<-ks.test(merged.df$signed.log10.p.value[merged.df$agreement==T],
+            merged.df$signed.log10.p.value[merged.df$agreement==F])
+
+ks.p<-ks$p.value
+if(ks.p==0){ks.p="< 2.2e-16"}else{
+  round<-ceiling(-log10(ks.p)+2)
+  ks.p<-round(ks.p,round)
+}
+
+
+# needs to be in a long format
+logFC.df.hist.my.p<-ggplot(merged.df, aes(x=signed.log10.p.value, fill=agreement))+
+  geom_density(alpha=0.4)+
+  xlim(c(-10,10))+
+  scale_fill_discrete(name="",
+                      labels=c("TRUE"="mRNA GO enrichment sign *agrees* with miRNA GO enrichment sign",
+                               "FALSE"="mRNA GO enrichment sign *disagrees* with miRNA GO enrichment sign")
+  )+
+  labs(subtitle = paste("Kolmogorov-Smirnov test p =",ks.p))+
+  ggtitle(paste(of.interest.mRNA, "mRNA_signed.log10.p.value"))+
+  theme_pubclean()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 14))
+logFC.df.hist.my.p
+
+
+plot_grid(
+  logFC.df.hist.mRNA.p,
+  logFC.df.hist.my.p,
+  labels=c("B","C"),
+  nrow=1)
+
+```
+
+
+
+```{r MIEA GO vs mRNA stage I GO}
+rv.stage1<-readRDS(paste0(working.directory,"/COVID_stage1_sRNA_MIEAA_all_results.RDS")) %>% data.frame(.)
+
+
+rv.stage1$common_name<-toupper(rv.stage1$Subcategory) %>%
+  sub("\\s+[^ ]+$", "", .) %>%
+  gsub(" ","_",.)
+
+
+sRNA<-rv.stage1[,c(1,2,grep("D7vsCT",colnames(rv.stage1)))] 
+mRNAs<-mRNAs_COVID_omics_stage1_fgseaCT_CT7_PCRpos_C5_BP_ # 
+
+sRNA$p<-sRNA[,grepl("P.value",colnames(sRNA))]
+sRNA$enrichment_sign<-sRNA[,grepl("Enrichment",colnames(sRNA))]
+sRNA$enrichment_sign[sRNA$enrichment_sign=="depleted"]<--1
+sRNA$enrichment_sign[sRNA$enrichment_sign=="enriched"]<-1
+sRNA$enrichment_sign%<>%as.numeric(.)
+sRNA$common_name<-rv.stage1$common_name
+
+
+sRNA$signed.log10.p.value<-(-log10(sRNA$p)*(sRNA$enrichment_sign))
+
+mRNAs$common_name<-gsub("GOBP_","",mRNAs$pathway)
+
+table(rv2$common_name[rv2$Category=="Annotations derived over miRTarBase (Gene Ontology)"] %in% mRNAs$common_name) # 
+
+
+mRNAs$sign<-mRNAs$NES<0
+mRNAs$sign[mRNAs$sign==T]<--1
+mRNAs$sign[mRNAs$sign==F]<-1
+
+mRNAs$mRNA_signed.log10.p.value<-(-log10(mRNAs$pval)*(mRNAs$sign))
+
+
+merged.df<-merge(mRNAs,sRNA)
+merged.df$agreement<-merged.df$enrichment_sign==merged.df$sign
+## not all pathways are in both datasets, this will be because we will have specified that only pathways containing at least n features in our data set should be interrogated. 
+
+## compare p vlaues / log FCs / t statistic with enrichment score/ NES / p.value ###
+
+# merge sRNA and mRNA results
+
+
+
+# for mRNA -- could use the NES or the mRNA_signed.log10.p.value
+# for sRNA -- have to use the p-value times the sign = signed.log10.p.value
+
+
+ggplot(merged.df,
+       aes(y=mRNA_signed.log10.p.value,
+           x=signed.log10.p.value))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+cor.test(merged.df$mRNA_signed.log10.p.value,
+         merged.df$signed.log10.p.value) 
+
+# NES vs t statistic
+ggplot(merged.df,
+       aes(y=abs(mRNA_signed.log10.p.value),
+           x=abs(signed.log10.p.value)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+
+
+cor.test(abs(merged.df$mRNA_signed.log10.p.value),abs(merged.df$signed.log10.p.value)) 
+
+
+contigency.table.all<-table(merged.df$signed.log10.p.value>0,merged.df$mRNA_signed.log10.p.value>0) # create a contigency table
+contigency.table.all
+chisq.test(contigency.table.all) # is there evidence of an unbalanced table (e.g. more agreement/less agreement than expected?)
+
+merged.p.less.than.05<-merged.df[abs(merged.df$NES)>=summary(abs(merged.df$NES))[5]&abs(merged.df$signed.log10.p.value)>=summary(abs(merged.df$signed.log10.p.value))[5],]
+
+merged.dont.change<-merged.df[abs(merged.df$NES)<=summary(abs(merged.df$NES))[2]&abs(merged.df$signed.log10.p.value)<=summary(abs(merged.df$signed.log10.p.value))[2],]
+
+
+ggplot(merged.p.less.than.05,
+       aes(y=NES,
+           x=signed.log10.p.value))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+ggplot(merged.dont.change,
+       aes(y=NES,
+           x=signed.log10.p.value))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+# NES vs t statistic
+ggplot(merged.p.less.than.05,
+       aes(y=abs(NES),
+           x=abs(signed.log10.p.value)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ggtitle(paste(of.interest,"vs",of.interest.mRNA))
+
+
+cor.test(merged.p.less.than.05$NES,merged.p.less.than.05$signed.log10.p.value) 
+cor.test(abs(merged.p.less.than.05$NES),abs(merged.p.less.than.05$signed.log10.p.value)) 
+
+
+
+mosaicplot(contigency.table.all,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+
+contigency.table.p.less.than.05.both<-table(merged.p.less.than.05$signed.log10.p.value>0,merged.p.less.than.05$NES>0) # create a contigency table
+contigency.table.p.less.than.05.both
+
+cat("chi squared all")
+chisq.test(contigency.table.all) 
+
+chisq.test(contigency.table.p.less.than.05.both) 
+
+cat("prop test")
+
+prop.test(
+  x = sum(merged.df$enrichment_sign==merged.df$sign), # number of successes
+  n = nrow(merged.df), 
+  p = 0.5 #
+)
+
+cat("enriched for things which change")
+
+
+
+
+prop.test(
+  x = sum(merged.p.less.than.05$enrichment_sign==merged.p.less.than.05$sign), # number of successes
+  n = nrow(merged.p.less.than.05), # total number of trials (77 + 73)
+  p = 0.5 #  test for equal proportion so prob = 0.5 in each group
+)
+
+# do things agree or disagree when there is no evidence of enrichment?
+
+prop.test(
+  x = sum(merged.dont.change$enrichment_sign==merged.dont.change$sign), # number of successes
+  n = nrow(merged.dont.change), # total number of trials (77 + 73)
+  p = 0.5 # we test for equal proportion so prob = 0.5 in each group
+)
+
+
+#plot agreement by rank
+merged.df$p
+
+
+merged.df$rank.p.sRNA<-rank(merged.df$p)
+merged.df$rank.p.mRNA<-rank(merged.df$pval)
+
+
+merged.df$combined.rank<-merged.df$rank.p.sRNA*merged.df$rank.p.mRNA
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=rank.p.sRNA))+
+  geom_boxplot()+
+  stat_compare_means()
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=rank.p.mRNA))+
+  geom_boxplot()+
+  stat_compare_means()
+
+
+ggplot(merged.df,
+       aes(x=agreement,
+           y=combined.rank))+
+  geom_boxplot()+
+  stat_compare_means()
+
+
+
+mosaicplot(contigency.table.p.less.than.05.both,
+           xlab="miR upregulated (t positive)",
+           ylab="mRNAs upreglated (NES score positive)")
+
+ylim<-max(abs(merged.df$mRNA_signed.log10.p.value))
+xlim<-max(abs(merged.df$signed.log10.p.value))
+
+prop.test<-prop.test(x=sum((merged.df$signed.log10.p.value>0)==(merged.df$mRNA_signed.log10.p.value>0)), n=nrow(merged.df), p=.5)
+p<-signif(prop.test$p.value,2)
+if(p<2.2e-16){
+  p<-"<2.2e-16"
+}
+stage1.plot.all.pathways<-ggplot(merged.df,
+                                aes(y=mRNA_signed.log10.p.value,
+                                    x=signed.log10.p.value,
+                                    colour=(mRNA_signed.log10.p.value<0)==(signed.log10.p.value<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  ggtitle("stage1 cohort: All miRNAs")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  # ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+prop.test<-prop.test(x=sum((merged.p.less.than.05$signed.log10.p.value>0)==(merged.p.less.than.05$mRNA_signed.log10.p.value>0)), n=nrow(merged.p.less.than.05), p=.5)
+p<-signif(prop.test$p.value,2)
+if(p<2.2e-16){
+  p<-"<2.2e-16"
+}
+stage1.plot.most.signifpathways<-ggplot(merged.p.less.than.05,
+                                       aes(y=mRNA_signed.log10.p.value,
+                                           x=signed.log10.p.value,
+                                           colour=(mRNA_signed.log10.p.value<0)==(signed.log10.p.value<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  ggtitle("stage1 cohort: pathways in top \n25th percentile for significance of enrichment")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+prop.test<-prop.test(x=sum((merged.dont.change$signed.log10.p.value>0)==(merged.dont.change$mRNA_signed.log10.p.value>0)), n=nrow(merged.dont.change), p=.5)
+p<-signif(prop.test$p.value,digits=2)
+if(p<2.2e-16){
+  p<-"<2.2e-16"
+}
+stage1.plot.least.signif.pathways<-ggplot(merged.dont.change,
+                                         aes(y=mRNA_signed.log10.p.value,
+                                             x=signed.log10.p.value,
+                                             colour=(mRNA_signed.log10.p.value<0)==(signed.log10.p.value<0)))+
+  geom_point()+
+  theme_minimal()+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  ylim(c(-ylim,ylim))+
+  xlim(c(-xlim,xlim))+
+  ggtitle("stage1 cohort: pathways in bottom \n25th percentile for significance of enrichment")+
+  labs(subtitle=paste("Propotion test p=",p))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+#  ggtitle(paste(of.interest,"vs",of.interest.mRNA))+
+  scale_color_discrete(name="direction of enrichment sign agrees \nwith direction of log2FC")+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+
+xlab("signed significance of pathway enrichment in \nmiRNA data -log10(p-value)*direction")+
+  ylab("signed significance of pathway enrichment in \nmRNA data -log10(p-value)*direction")+
+  
+  p<-get_legend(plot.least.signif.pathways)
+
+
+
+plot_grid(plot.all.pathways,plot.most.signifpathways,plot.least.signif.pathways,p,
+          labels=c("A","B","C",""))
+
+stage1.agreement.vs.p<-ggplot(merged.df, 
+                             aes(
+                               y=p,
+                               x=agreement,
+                               colour=agreement,
+                               fill=agreement))+
+  ggtitle("stage1 cohort")+
+  ylab("signicance of pathway enrichment \n in the miRNA data(p-value)")+
+  xlab("Pathway enrichment direction in \nthe miRNA and mRNA dataset agree?")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+stage1.agreement.vs.mRNA_signed.log10.p.value<-ggplot(merged.df,
+                                                       aes(
+                                                         y=pval,
+                                                         x=agreement,
+                                                         colour=agreement,
+                                                         fill=agreement))+
+  ylab("signicance of pathway enrichment \n in the mRNA data(p-value)")+
+  xlab("Pathway enrichment direction in \nthe miRNA and mRNA dataset agree?")+
+  geom_violin(fill="lightgrey",colour="light grey")+
+  geom_boxplot(alpha=0.2,outlier.alpha = 0)+
+  ggtitle("stage1 cohort")+
+  theme_pubr()+
+  geom_jitter(width=0.2,alpha=0.5)+
+  stat_compare_means()+
+  theme(legend.position = "none",plot.title = element_text(size=10),axis.title=element_text(size=10))
+
+
+plot_grid(stage1.plot.all.pathways,stage1.plot.most.signifpathways,stage1.plot.least.signif.pathways,
+          stage1.agreement.vs.p,stage1.agreement.vs.mRNA_signed.log10.p.value,
+          plot.all.pathways,plot.most.signifpathways,plot.least.signif.pathways,
+          agreement.vs.p,agreement.vs.mRNA_signed.log10.p.value,
+          labels=c("AUTO"),
+          nrow=2)
+
+```
+
+
+
+

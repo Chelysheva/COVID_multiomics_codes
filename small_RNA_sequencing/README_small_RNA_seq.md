@@ -85,3 +85,7 @@ pilot_contrast.options_analysis.2 – tells you where in pilot.analysis.2 the re
 pilot_contrast.options_analysis.3 – tells you where in pilot.analysis.3 the result of each contrast is.
 
 To access a particular differential gene expression results table, look up the contrast name in the appropriate contrast.options table – this tells you what the contrast is called and where in the associated list your results table can be found. 
+
+
+
+
