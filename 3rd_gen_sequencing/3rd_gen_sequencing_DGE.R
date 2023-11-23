@@ -104,9 +104,9 @@ write.table(g_transcripts_vaccines2, "COVID_ONT_DGE_D0_placebo_NAATpos.txt", quo
 g_transcripts_vaccines3 <- topTable(fit, n=Inf, adjust="fdr",p.value = 1,coef = 3)
 write.table(g_transcripts_vaccines3, "COVID_ONT_DGE_D0_ChAdOx1_NAATpos.txt", quote = F, sep= "\t", row.names = F)
 g_transcripts_vaccines4 <- topTable(fit, n=Inf, adjust="fdr",p.value = 1,coef = 4)
-write.table(g_transcripts_vaccines4, "COVID_ONT_DGE_D0_placebo_NAATpos_NAATneg.txt", quote = F, sep= "\t", row.names = F)
+write.table(g_transcripts_vaccines4, "COVID_ONT_DGE_CT_placebo_NAATpos_NAATneg.txt", quote = F, sep= "\t", row.names = F)
 g_transcripts_vaccines5 <- topTable(fit, n=Inf, adjust="fdr",p.value = 1,coef = 5)
-write.table(g_transcripts_vaccines5, "COVID_ONT_DGE_D0_ChAdOx1_NAATpos_NAATneg.txt", quote = F, sep= "\t", row.names = F)
+write.table(g_transcripts_vaccines5, "COVID_ONT_DGE_CT_ChAdOx1_NAATpos_NAATneg.txt", quote = F, sep= "\t", row.names = F)
 
 
 #### Volcano plots ####
